@@ -1,3 +1,4 @@
+import module_using_sys
 # 这是一个注释：print 是一个函数
 print("hello world")
 
@@ -26,3 +27,28 @@ print("This is the first sentence. \
 This is the second sentence.")
 #在字符串前增加r 或 R 来指定一个 原始（Raw） 字符串
 print(r"Newlines are indicated by \n")
+
+
+i = 5
+print(i)
+i = i + 1
+print(i)
+s = '''This is a multi-line string.
+This is the second line.'''
+print(s)
+
+print(i==6)
+i+=1
+print(i>=6 | i<=7)
+print(i>=6 & i>=7)
+
+# / （除）,//（整除）
+print(1/3)
+print(1//3)
+# % （取模）
+print(10%3)
+# ** （乘方）
+print(3**3)
+
+module_using_sys.say_hi()
+print('Version', module_using_sys.__version__)
