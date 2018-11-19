@@ -1,4 +1,5 @@
-import module_using_sys
+from com.qslion.test import module_using_sys
+
 # 这是一个注释：print 是一个函数
 print("hello world")
 
