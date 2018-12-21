@@ -97,10 +97,14 @@ a.insert(2,'t')
 a.append('q')
 返回a列表中，元素m第一次出现的索引位置: a.index(m)
 a.index('e')
-删除a中的第一个m元素: a.remove(m)
+删除a中的第一个值为m的元素: a.remove(m)
 a.remove('e')
-将列表a从大到小排列: a.sort()
+将列表a从大到小永久性排列: a.sort()，倒序 a.sort(reverse=true),临时排序：sorted(a);
+列表反转：a.reverse()
 
+将列表索引位置为n 的元素出栈即删除： pop(n)，n为空时表示删除列表最后一个元素。
+
+使用del命令删除 ：del a[n]
 字典操作
 dict函数可以通过关键字参数来创建字典，格式为： dict(参数1=值1,参数2=值2, …)={参数1:值1, 参数2=值2, …}
 比如，如何创建一个名字name为jiayounet，年龄age为28的字典？
