@@ -24,7 +24,7 @@ class BaseStock(Document):
     timestamp = Date()  # 创建时间
 
     class Index:
-        name = 'stock-list-*'
+        name = 'stock-list'
         settings = {
             "number_of_shards": 2,
         }
@@ -34,15 +34,15 @@ class BaseStock(Document):
         if not self.timestamp:
             self.timestamp = datetime.now()
         # override the index to go to the proper timeslot
-        kwargs['index'] = self.timestamp.strftime('stock-list--%Y%m%d')
+        #kwargs['index'] = self.timestamp.strftime('stock-list-%Y%m%d')
         return super(BaseStock, self).save(**kwargs)
 
 
-# create the mappings in elasticsearch
-BaseStock.init()
-
-# create and save and article
-stock = BaseStock(meta={'id': 42}, title='Hello world!', tags=['test'])
-stock.body = ''' looong text '''
-stock.published_from = datetime.now()
-stock.save()
+# # create the mappings in elasticsearch
+# BaseStock.init()
+#
+# # create and save and article
+# stock = BaseStock(meta={'id': 42}, title='Hello world!', tags=['test'])
+# stock.body = ''' looong text '''
+# stock.published_from = datetime.now()
+# stock.save()
