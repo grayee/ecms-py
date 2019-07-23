@@ -1,4 +1,4 @@
-from com.qslion.test import module_using_sys
+# from com.qslion.test import module_using_sys
 
 # 这是一个注释：print 是一个函数
 print("hello world")
@@ -51,5 +51,5 @@ print(10%3)
 # ** （乘方）
 print(3**3)
 
-module_using_sys.say_hi()
-print('Version', module_using_sys.__version__)
+# module_using_sys.say_hi()
+# print('Version', module_using_sys.__version__)
