@@ -63,7 +63,7 @@ now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 print (now)
 
 for i in range(0, 10):
-    nowTime = datetime.datetime.now().strftime("%Y%m%d%H%M%S");  # 生成当前时间
+    nowTime = datetime.datetime.now().strftime("%Y%m%d%H%M%S")  # 生成当前时间
     randomNum = random.randint(0, 100)  # 生成的随机整数n，其中0<=n<=100
     if randomNum <= 10:
        randomNum = str(0) + str(randomNum)

@@ -2,6 +2,8 @@ from datetime import datetime
 from elasticsearch_dsl import Document, Date, Nested, analyzer, InnerDoc, Completion, Integer, Boolean, Keyword, Text
 from elasticsearch_dsl.connections import connections
 
+import elasticsearch as elastic
+
 # Es 默认连接, Define a default Elasticsearch client
 connections.create_connection(hosts=['localhost'], timeout=20)
 
@@ -46,3 +48,15 @@ class BaseStock(Document):
 # stock.body = ''' looong text '''
 # stock.published_from = datetime.now()
 # stock.save()
+
+
+# 连接本地ES
+# es = elastic.Elasticsearch("localhost:9200")
+# if  not es.indices.exists('my-stock') :
+#     es.indices.create(index='my-stock', ignore=400)
+
+
+
+# es.index('my-stock',"indexType",jsonArray);
+
+# es.bulk(index="my-stock",doc_type="indexType",body=[{"any":"data02","timestamp":datetime.now()},{"any":"data03","timestamp":datetime.now()}])

@@ -15,8 +15,8 @@ sqrts = list(map(lambda x: math.sqrt(x), input_values))
 
 fig = plt.figure(figsize=(10, 5))  # 指定画图区大小（长，宽）
 
-ax1 = fig.add_subplot(1,2,1)
-ax2 = fig.add_subplot(1,2,2)
+ax1 = fig.add_subplot(1,2,1) #一个1*2(1行2列)子图中的第一个模块
+ax2 = fig.add_subplot(1,2,2) #一个1*2子图中的第一个模块
 
 # plot(x轴,y轴)方法画图
 ax1.plot(input_values, squares, linewidth=2, label="平方")
@@ -29,6 +29,10 @@ ax1.set_xlabel(u"数值", fontsize=14)
 ax1.set_ylabel(u"数值平方", fontsize=14)
 # # 设置刻度标记大小
 ax1.tick_params(axis="both", labelsize=10)
+
+dates = pd.date_range('20190101', periods=7)
+df = pd.DataFrame(np.random.randn(7, 4), index=dates, columns=list('ABCD'))
+print(dates)
 
 ax2.plot(np.random.randint(1,5,5), np.arange(5)) #子图画图
 ax2.set_xlabel('Rotten Tomatoes')

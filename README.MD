@@ -146,6 +146,7 @@ NumPy是高性能科学计算和数据分析的基础包。部分功能如下：
 
 我们首先载入numpy包，因为它是第三方工具，所以每次使用前必须在代码中载入。as是命名为别名，方便调用，np是numpy约定俗成的简写。
 import numpy as np
+import Pandas as pd
 创建数组使用numpy中的array函数，新手要记住加np。我们将系统自带的列表list转换成了numpy中的数组。
 a = [1, 2, 4, 3]        #vector
 b = np.array(a)         # array([1, 2, 4, 3])
@@ -153,6 +154,14 @@ type(b)                 # <type 'numpy.ndarray'>
 
 
 pandas有两个主要的数据结构，Series和DataFrame，记住大小写区分。
-Series类似于一维数组，和numpy的array接近，由一组数据和数据标签组成。数据标签有索引的作用。
-DataFrame是一个表格型的数据结构，它含有不同的列，每列都是不同的数据类型。我们可以把DataFrame看作Series组成的字典，
+Series((collection of values))类似于一维数组，和numpy的array接近，由一组数据和数据标签组成。数据标签有索引的作用。
+DataFrame((collection of Series objects))是一个表格型的数据结构，它含有不同的列，每列都是不同的数据类型。我们可以把DataFrame看作Series组成的字典，
 它既有行索引也有列索引。想象得更明白一点，它类似一张excel表格或者SQL，只是功能更强大。
+Panel (collection of DataFrame objects)
+
+
+np.arange(5) #生成一个从0到num-1步数为1的一维ndarray
+np.random.randint(1,5,5) #从给定的begin和end随机选取num个整数
+randn(N, M, ...)	#生成一个N*M*...的正态分布（平均值为0，标准差为1）的ndarray
+
+T	frame行列转置
