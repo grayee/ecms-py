@@ -153,11 +153,16 @@ b = np.array(a)         # array([1, 2, 4, 3])
 type(b)                 # <type 'numpy.ndarray'>
 
 
-pandas有两个主要的数据结构，Series和DataFrame，记住大小写区分。
-Series((collection of values))类似于一维数组，和numpy的array接近，由一组数据和数据标签组成。数据标签有索引的作用。
-DataFrame((collection of Series objects))是一个表格型的数据结构，它含有不同的列，每列都是不同的数据类型。我们可以把DataFrame看作Series组成的字典，
-它既有行索引也有列索引。想象得更明白一点，它类似一张excel表格或者SQL，只是功能更强大。
-Panel (collection of DataFrame objects)
+pandas有三个数据结构，注意大小写区分。
+Series((collection of values)) ：类似于一维数组，和numpy的array接近，由一组数据和数据标签组成。数据标签有索引的作用。
+
+DataFrame((collection of Series objects))：是一个表格型的数据结构，它含有不同的列，每列都是不同的数据类型。我们可以把DataFrame看作Series组成的字典，
+它既有行索引（index）也有列索引(columns)。想象得更明白一点，它类似一张excel表格或者SQL，只是功能更强大。
+
+Panel (collection of DataFrame objects) ：Panel是DataFrame的容器
+
+考虑这些数据结构的最好方法是，较高维数据结构是其较低维数据结构的容器。 例如，DataFrame是Series的容器，Panel是DataFrame的容器。
+
 
 
 np.arange(5) #生成一个从0到num-1步数为1的一维ndarray
