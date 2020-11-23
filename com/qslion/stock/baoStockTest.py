@@ -3,6 +3,8 @@
 import baostock as bs
 import pandas as pd
 import datetime
+import openpyxl
+import os
 
 
 def download_data(date):
@@ -23,20 +25,48 @@ def download_data(date):
 
     # 输出
     print(data_df)
-    data_df.to_csv("D:\\demo_assignDayData.csv", encoding="gbk", index=False)
+    write_to_excel(data_df, 'd:\\output-' + datetime.datetime.now().strftime('%Y-%m') + '.xlsx', date)
+
+
+def write_to_excel(data, file_name, sheet_name):
+    """
+    不改变原有Excel的数据，新增sheet。
+    注：
+        使用openpyxl操作Excel时Excel必需存在，因此要新建空sheet
+        无论如何sheet页都会被新建，只是当sheet_name已经存在时会新建一个以1结尾的sheet，如：test已经存在时，新建sheet为test1，以此类推
+    :param file_name: 文件路径
+    :param data: DataFrame数据
+    :param sheet_name: 新增的sheet名称
+    :return:
+    """
+    # render dataframe as html
+    excel_writer = pd.ExcelWriter(file_name, engine='openpyxl')
+
+    if os.path.exists(excel_writer.path):
+        book = openpyxl.load_workbook(excel_writer.path)
+        excel_writer.book = book
+
+    data.to_excel(excel_writer=excel_writer, sheet_name=sheet_name, index=None)
+    excel_writer.save()
+    excel_writer.close()
 
 
 def filter_data(data_df):
+    data_df = data_df.loc[lambda x: (x.isST == '0') & (x.tradestatus == '1')]
     ##格式化数据########
     # data_df['name'] = stock_names
     data_df['open'] = data_df['open'].astype(float)
     data_df['high'] = data_df['high'].astype(float)
     data_df['low'] = data_df['low'].astype(float)
+    data_df['preclose'] = data_df['preclose'].astype(float)
     data_df['close'] = data_df['close'].astype(float)
     data_df['amplitude'] = data_df.apply(lambda x: round((x.high - x.low) / x.low, 2), axis=1).astype(float)
-    # 过滤:振幅>10%,向下振幅>=5%,非ST，非停牌
+
+
+    # 过滤:振幅>10%,向下振幅>=5%,向上振幅>=%3,收盘价>昨日收盘价，非ST，非停牌
     data_df = data_df.loc[lambda x: (x.amplitude >= 0.1) & ((x.close - x.low) / x.low >= 0.05) & (
-            (x.high - x.close) / x.close >= 0.03) & (x.isST == '0') & (x.tradestatus == '1')]
+            (x.high - x.close) / x.close >= 0.03) & (x.close > x.preclose) & (x.isST == '0') & (x.tradestatus == '1')]
+
     data_df['turn'] = round(data_df['turn'].astype(float), 2)
     data_df['pctChg'] = round(data_df['pctChg'].astype(float), 2)
     data_df['amount'] = data_df['amount'].astype(float) / 10000
@@ -45,9 +75,11 @@ def filter_data(data_df):
     data_df['pbMRQ'] = round(data_df['pbMRQ'].astype(float), 2)
     data_df['pcfNcfTTM'] = round(data_df['pcfNcfTTM'].astype(float), 2)
 
+
+
     ##排序##
     data_df.sort_index(axis=1)
-    data_df.sort_values(by=['amplitude'], inplace=True, ascending=False)
+    data_df = data_df.sort_values(by=['amplitude'], ascending=False)
     # 重置索引
     data_df.reset_index(drop=True, inplace=True)
     return data_df
@@ -61,6 +93,7 @@ def download_data_by_day(date):
     # stock_names= []
     for code in stock_df["code"]:
         if code.startswith('sz.300'):
+            # if code.startswith('sz.300') or code.startswith('sz.00') or code.startswith('sh.60'):
             print("Downloading :" + code + '...')
             k_rs = get_history_k_data(code, date)
             data_df = data_df.append(k_rs.get_data())
@@ -72,7 +105,7 @@ def get_history_k_data(code, date):
     # date:日期,code:代码,open:开盘价,high:最高价,low:最高价,close:收盘价,volume:成交量(股),amount:成交额(元),
     # adjustflag:复权状态(1:后复权,2:前复权,3:不复权),turn;换手率,tradestatus:交易状态(1：正常交易 0：停牌）,pctChg:涨跌幅(百分比),peTTM:滚动市盈率,pbMRQ:市净率,pcfNcfTTM:滚动市现率,isST:是否ST股(1是，0否)
     k_rs = bs.query_history_k_data_plus(code,
-                                        "date,code,open,high,low,close,volume,amount,turn,tradestatus,pctChg,peTTM,pbMRQ,pcfNcfTTM,isST",
+                                        "date,code,open,high,low,preclose,close,volume,amount,turn,tradestatus,pctChg,peTTM,pbMRQ,pcfNcfTTM,isST",
                                         start_date=date, end_date=date, frequency='d',
                                         adjustflag="3")
     return k_rs
@@ -82,6 +115,6 @@ if __name__ == '__main__':
     #### 登陆系统 ####
     bs.login()
     # 获取指定日期全部日线数据
-    download_data('2020-11-11')
+    download_data('2020-11-18')
     #### 登出系统 ####
     bs.logout()
