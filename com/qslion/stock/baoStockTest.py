@@ -23,6 +23,32 @@ def download_data(date):
     #            rs_df = rs_df.append(k_rs.get_data())
     #
 
+    print("当日过滤数据", data_df)
+    write_to_excel(data_df, 'd:\\output-' + datetime.datetime.now().strftime('%Y-%m') + '-filter.xlsx', date)
+    # 过滤上个交易日相关指标
+    begin_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+    basic_df = pd.DataFrame()
+    for row_index, row in data_df.iterrows():
+        if begin_date.isoweekday() == 1:
+            day_step = -3
+        else:
+            day_step = -1
+
+        # 上一个工作日
+        last_work_day = begin_date + datetime.timedelta(days=day_step)
+        last_rs = get_history_k_data(row.code, last_work_day.strftime("%Y-%m-%d"))
+
+        last_st = last_rs.get_data().loc[0]
+        # 当日最低价小于等于上日最低价，当日收盘价高于上日最高价,上一日涨幅或跌幅<10%
+        if row.low <= float(last_st.low) and row.close > float(last_st.high) and abs(
+                float(last_st.close) - float(last_st.open)) < 10:
+            # 名称
+            basic_rs = bs.query_stock_basic(code=row.code)
+            basic_df = basic_df.append(basic_rs.get_data())
+
+    data_df = pd.merge(data_df, basic_df, how='inner', on=['code'])
+    # 改变数据列的顺序
+    data_df = data_df[['date', 'code', 'code_name','pctChg', 'amplitude', 'turn', 'close', 'open', 'high', 'low', 'amount','peTTM']]
     # 输出
     print(data_df)
     write_to_excel(data_df, 'd:\\output-' + datetime.datetime.now().strftime('%Y-%m') + '.xlsx', date)
@@ -50,32 +76,30 @@ def write_to_excel(data, file_name, sheet_name):
     excel_writer.save()
     excel_writer.close()
 
-
 def filter_data(data_df):
-    data_df = data_df.loc[lambda x: (x.isST == '0') & (x.tradestatus == '1')]
+    #data_df = data_df[data_df['tradestatus'] == 1]
     ##格式化数据########
-    # data_df['name'] = stock_names
     data_df['open'] = data_df['open'].astype(float)
     data_df['high'] = data_df['high'].astype(float)
     data_df['low'] = data_df['low'].astype(float)
-    data_df['preclose'] = data_df['preclose'].astype(float)
     data_df['close'] = data_df['close'].astype(float)
+    data_df['preclose'] = data_df['preclose'].astype(float)
     data_df['amplitude'] = data_df.apply(lambda x: round((x.high - x.low) / x.low, 2), axis=1).astype(float)
 
 
-    # 过滤:振幅>10%,向下振幅>=5%,向上振幅>=%3,收盘价>昨日收盘价，非ST，非停牌
-    data_df = data_df.loc[lambda x: (x.amplitude >= 0.1) & ((x.close - x.low) / x.low >= 0.05) & (
-            (x.high - x.close) / x.close >= 0.03) & (x.close > x.preclose) & (x.isST == '0') & (x.tradestatus == '1')]
+    # 过滤:振幅>8%,向下振幅>=5%,向上振幅大>%2,涨幅>=%5,非ST，非停牌
+    data_df = data_df.loc[lambda x: (x.amplitude >= 0.08) & ((x.close - x.low) / x.low >= 0.05) & (
+            (x.high - x.close) / x.close > 0.02) & (x.close > x.preclose) & (x.isST == '0') & (
+                                                x.tradestatus == '1')]
 
+    data_df['pctChg'] = data_df['pctChg'].astype(float)
     data_df['turn'] = round(data_df['turn'].astype(float), 2)
-    data_df['pctChg'] = round(data_df['pctChg'].astype(float), 2)
+    data_df['pctChg'] = round(data_df['pctChg'], 2)
     data_df['amount'] = data_df['amount'].astype(float) / 10000
     data_df['volume'] = data_df['volume'].astype(float) / 100
     data_df['peTTM'] = round(data_df['peTTM'].astype(float), 2)
     data_df['pbMRQ'] = round(data_df['pbMRQ'].astype(float), 2)
     data_df['pcfNcfTTM'] = round(data_df['pcfNcfTTM'].astype(float), 2)
-
-
 
     ##排序##
     data_df.sort_index(axis=1)
@@ -92,8 +116,7 @@ def download_data_by_day(date):
     data_df = pd.DataFrame()
     # stock_names= []
     for code in stock_df["code"]:
-        if code.startswith('sz.300'):
-            # if code.startswith('sz.300') or code.startswith('sz.00') or code.startswith('sh.60'):
+        if code.startswith('sz.300'): #or code.startswith('sz.00') or code.startswith('sh.60'):
             print("Downloading :" + code + '...')
             k_rs = get_history_k_data(code, date)
             data_df = data_df.append(k_rs.get_data())
@@ -115,6 +138,6 @@ if __name__ == '__main__':
     #### 登陆系统 ####
     bs.login()
     # 获取指定日期全部日线数据
-    download_data('2020-11-18')
+    download_data('2020-12-03')
     #### 登出系统 ####
     bs.logout()
