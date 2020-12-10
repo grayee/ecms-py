@@ -36,19 +36,42 @@ def algo(context):
     # print("上一个交易日:", last_day)
     data_df = get_filter_stocks(context, last_day)
     print(data_df)
-    data_df.to_csv('d:\\his1.csv',encoding='utf_8_sig')
+    data_df.to_csv('d:\\his1.csv', encoding='utf_8_sig')
+    context.stocks = data_df
     unsubscribe(symbols='*', frequency='60s')
     subscribe(symbols=','.join(data_df['symbol']), frequency='60s')
+
+    for stock in context.hold_days:
+        # 持仓天数增加
+        context.hold_days[stock] += 1
+        # 持仓到期股票
+        if context.hold_days[stock] > context.periods:
+            order_target_percent(symbol=stock, percent=0, order_type=OrderType_Market,
+                                 position_side=PositionSide_Long)
 
 
 def on_bar(context, bars):
     # 持仓数未达上限
     if context.hold_count < context.hold_max:
         # 打印bar数据
-        print("bars:", bars[0]['close'])
+        stock_df = context.stocks[context.stocks['symbol'] == bars[0]['symbol']]
+        if bars[0]['close'] < stock_df.iloc[0].ma5 * 1.02 and not context.account().position(symbol=bars[0]['symbol'],
+                                                                                             side=PositionSide_Long):
+            print("bars:", bars[0]['close'])
+            print("买入信号====>>", stock_df.iloc[0].ma5 * 1.02)
+            # 计算每个个股应该在持仓中的权重
+            percent = 1.0 / context.hold_max * context.ratio
+            # 限价买入
+            order_target_percent(symbol=bars[0]['symbol'], percent=percent, order_type=OrderType_Limit,
+                                 price=bars[0]['close'], position_side=PositionSide_Long)
+            context.hold_count = context.hold_count + 1
+            context.hold_days[bars[0]['symbol']] = 0
+    else:
+        print("持仓数达上限:", context.hold_count)
+
+        # 4.获得卖出股票池
 
 
-# 4.获得卖出股票池
 def stocks_to_sell(context):
     sell_stocks = []
     # 持仓到期股票
@@ -60,8 +83,6 @@ def stocks_to_sell(context):
     return sell_stocks
 
 
-
-
 # 8.交易操作
 def trade_stocks(sell_stocks, buy_stocks, context):
     # 卖出操作
@@ -70,7 +91,7 @@ def trade_stocks(sell_stocks, buy_stocks, context):
         log.info(str(stock) + ":买出操作")
     # 每股资金
     Count = max([1, len(buy_stocks)])
-    one_cash = context.portfolio.stock_account.available_cash / Count
+    one_cash = context.account().cash / Count
 
     # 买入操作
     for stock in buy_stocks:
@@ -137,13 +158,13 @@ def get_filter_stocks(context, history_day):
     # 格式化为float，然后处理成%格式： {:.2f}%
     # history_df['amplitude'] = history_df.apply(lambda x: '{:.2f}%'.format((x.high - x.low)*100 / x.low), axis=1)
     # 振幅
-    history_df['amplitude'] = history_df.apply(lambda x: round((x.high - x.low) / x.low, 2), axis=1).astype(float)
+    history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
 
     # 过滤:振幅>8%,向下振幅>=5%,向上振幅大>%2,涨幅>=%5
     history_df = history_df.loc[lambda x: (x.amplitude >= 0.08) & ((x.close - x.low) / x.low >= 0.05) & (
             (x.high - x.close) / x.close > 0.02) & (x.close > x.pre_close)]
 
-    ##排序##
+    ## 排序 ##
     history_df.sort_index(axis=1)
     history_df = history_df.sort_values(by=['amplitude'], ascending=False)
     # 重置索引
@@ -163,16 +184,18 @@ def get_filter_stocks(context, history_day):
     for row_index, row in history_df.iterrows():
         history_n_data = history_n(symbol=row.symbol, frequency='1d', count=5, end_time=history_day,
                                    fields='symbol, open, close, low, high, eob', adjust=ADJUST_PREV, df=True)
-        #收盘价在5日均线之上
+        # 收盘价在5日均线之上
         ma5 = history_n_data['close'].mean()
         if row.close > ma5:
-            pre_row = pre_his_df[pre_his_df.symbol == row.symbol].iloc[0]
-            # 当日最低价小于等于上日最低价(@todo 待优化)，当日收盘价高于上日最高价,上一日涨幅或跌幅<10%
-            if row.low <= pre_row.low and row.close > pre_row.high and abs(pre_row.close - pre_row.open) < 10:
-                row['anme'] = all_stock[all_stock.symbol == row.symbol].iloc[0].sec_name
-                row['ma5'] = ma5
-                data_df = data_df.append(row)
-
+            pre_row_df = pre_his_df[pre_his_df.symbol == row.symbol]
+            if not pre_his_df.empty:
+                pre_row = pre_row_df.iloc[0]
+                # 当日最低价小于等于上日最低价(@todo 待优化)，当日收盘价高于上日最高价,上一日涨幅或跌幅<9%
+                if row.low <= pre_row.low and row.close > pre_row.high and abs(
+                        (pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
+                    row['anme'] = all_stock[all_stock.symbol == row.symbol].iloc[0].sec_name
+                    row['ma5'] = ma5
+                    data_df = data_df.append(row)
 
     data_df.reset_index(drop=True, inplace=True)
     return data_df
