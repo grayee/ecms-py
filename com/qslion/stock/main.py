@@ -5,9 +5,7 @@ from datetime import timedelta
 import pandas as pd
 
 """
-小市值策略
-本策略每个月触发一次，计算当前沪深市场上市值最小的前30只股票，并且等权重方式进行买入。
-对于不在前30的有持仓的股票直接平仓。
+策略
 回测时间为：2018-07-01 08:00:00 到 2019-10-01 16:00:00 
 """
 
@@ -17,7 +15,16 @@ def init(context):
     # 每月第一个交易日的09:40 定时执行algo任务
     schedule(schedule_func=algo, date_rule='1d', time_rule='09:40:00')
 
-    # 使用多少的资金来进行开仓。
+    # 1.设置策略参数
+    # 最大持有股票数
+    context.hold_max = 2
+    # 持有天数
+    context.periods = 3
+    # 当前持仓数
+    context.hold_count = 0
+    # 各股票持仓时间
+    context.hold_days = {}
+    # 最大交易资金比例
     context.ratio = 0.8
 
 
@@ -26,12 +33,51 @@ def algo(context):
     now = context.now
     # 获取上一个交易日
     last_day = get_previous_trading_date(exchange='SHSE', date=now)
-    print("上一个交易日:", last_day)
+    # print("上一个交易日:", last_day)
     data_df = get_filter_stocks(context, last_day)
     print(data_df)
+    data_df.to_csv('d:\\his1.csv',encoding='utf_8_sig')
+    unsubscribe(symbols='*', frequency='60s')
+    subscribe(symbols=','.join(data_df['symbol']), frequency='60s')
+
+
+def on_bar(context, bars):
+    # 持仓数未达上限
+    if context.hold_count < context.hold_max:
+        # 打印bar数据
+        print("bars:", bars[0]['close'])
+
+
+# 4.获得卖出股票池
+def stocks_to_sell(context):
+    sell_stocks = []
+    # 持仓到期股票
+    for stock in context.hold_days:
+        if context.hold_days[stock] > context.periods:
+            sell_stocks.append(stock)
+    # 更新当前持仓数
+    context.hold_count = len(context.account().positions()) - len(sell_stocks)
+    return sell_stocks
 
 
 
+
+# 8.交易操作
+def trade_stocks(sell_stocks, buy_stocks, context):
+    # 卖出操作
+    for stock in sell_stocks:
+        order_target_value(stock, 0)
+        log.info(str(stock) + ":买出操作")
+    # 每股资金
+    Count = max([1, len(buy_stocks)])
+    one_cash = context.portfolio.stock_account.available_cash / Count
+
+    # 买入操作
+    for stock in buy_stocks:
+        order_target_percent(symbol=stock, percent=0, order_type=OrderType_Market,
+                             position_side=PositionSide_Long)
+        log.info(str(stock) + ":买入操作，买入金额：" + str(one_cash))
+        context.hold_days[stock] = 0
 
 
 # code.to_csv('d:\\code.csv')
@@ -73,7 +119,7 @@ def algo(context):
 #     print(symbol, '以市价单调整至权重', percent)
 
 
-def  get_filter_stocks(context, history_day):
+def get_filter_stocks(context, history_day):
     # 选取全A股（剔除停牌和st股和上市不足50日的新股和退市股和B股）
     date1 = (context.now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
     date2 = context.now.strftime("%Y-%m-%d %H:%M:%S")
@@ -87,8 +133,7 @@ def  get_filter_stocks(context, history_day):
                          end_time=history_day,
                          fields='symbol,pre_close,open, close, low, high, volume,amount,eob,bob', adjust=ADJUST_PREV,
                          df=True)
-    # history_n_data = history_n(symbol='SZSE.002519', frequency='1d', count=13, end_time=now,
-    #                            fields='symbol, open, close, low, high, eob', adjust=ADJUST_PREV, df=True)
+
     # 格式化为float，然后处理成%格式： {:.2f}%
     # history_df['amplitude'] = history_df.apply(lambda x: '{:.2f}%'.format((x.high - x.low)*100 / x.low), axis=1)
     # 振幅
@@ -103,11 +148,11 @@ def  get_filter_stocks(context, history_day):
     history_df = history_df.sort_values(by=['amplitude'], ascending=False)
     # 重置索引
     history_df.reset_index(drop=True, inplace=True)
-    history_df.to_csv('d:\\his.csv')
+    # history_df.to_csv('d:\\his.csv')
 
     # 前日
     before_day = get_previous_trading_date(exchange='SHSE', date=history_day)
-    print("前日", before_day)
+    # print("前日", before_day)
 
     pre_his_df = history(symbol=','.join(history_df['symbol']), frequency='1d', start_time=before_day,
                          end_time=before_day,
@@ -116,13 +161,20 @@ def  get_filter_stocks(context, history_day):
 
     data_df = pd.DataFrame()
     for row_index, row in history_df.iterrows():
-        pre_row = pre_his_df[pre_his_df.symbol == row.symbol]
-        # print("pre===>>",pre_row)
-        print("cur===>>", row)
-        # 当日最低价小于等于上日最低价，当日收盘价高于上日最高价,上一日涨幅或跌幅<10%
-        # if row.low <= pre_row.low and row.close > pre_row.high and abs(pre_row.close - pre_row.open) < 10:
-        #     data_df.append(row)
+        history_n_data = history_n(symbol=row.symbol, frequency='1d', count=5, end_time=history_day,
+                                   fields='symbol, open, close, low, high, eob', adjust=ADJUST_PREV, df=True)
+        #收盘价在5日均线之上
+        ma5 = history_n_data['close'].mean()
+        if row.close > ma5:
+            pre_row = pre_his_df[pre_his_df.symbol == row.symbol].iloc[0]
+            # 当日最低价小于等于上日最低价(@todo 待优化)，当日收盘价高于上日最高价,上一日涨幅或跌幅<10%
+            if row.low <= pre_row.low and row.close > pre_row.high and abs(pre_row.close - pre_row.open) < 10:
+                row['anme'] = all_stock[all_stock.symbol == row.symbol].iloc[0].sec_name
+                row['ma5'] = ma5
+                data_df = data_df.append(row)
 
+
+    data_df.reset_index(drop=True, inplace=True)
     return data_df
 
 
