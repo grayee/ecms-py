@@ -38,7 +38,7 @@ def algo(context):
 
     if not data_df.empty:
         print('【'+context.now.strftime("%Y-%m-%d") + '】过滤结果：' + ','.join(data_df['symbol']))
-        data_df.to_csv('d:\\his-' + context.now.strftime("%Y-%m-%d") + '.csv', encoding='utf_8_sig')
+        # data_df.to_csv('d:\\his-' + context.now.strftime("%Y-%m-%d") + '.csv', encoding='utf_8_sig')
         context.stocks = data_df
         subscribe(symbols=','.join(data_df['symbol']), frequency='60s')
 
@@ -70,9 +70,12 @@ def on_bar(context, bars):
                                                                                  side=PositionSide_Long):
             if context.hold_days.get(bar['symbol'], 0) >= 1:
                 vwap = context.account().position(symbol=bar['symbol'], side=PositionSide_Long).vwap
+                returns = 1.08
+                if bar['symbol'].startswith('SZSE.300'):
+                    returns = 1.15
 
                 # 卖出策略1：预期收益+15%
-                if bar['close'] / vwap > 1.15:
+                if bar['close'] / vwap > returns:
                     order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
                                          position_side=PositionSide_Long)
 
@@ -107,6 +110,7 @@ def get_filter_stocks(context):
                                 df=True)
     code_df = all_stock[(all_stock['listed_date'] < date1) & (all_stock['delisted_date'] > date2) &
                         (all_stock['symbol'].str[5] != '9') & (all_stock['symbol'].str[5] != '2')]
+
     history_df = history(symbol=','.join(code_df['symbol']), frequency='1d', start_time=history_day,
                          end_time=history_day,
                          fields='symbol,pre_close,open, close, low, high, volume,amount,eob,bob', adjust=ADJUST_PREV,
@@ -146,13 +150,14 @@ def get_filter_stocks(context):
                                    fields='symbol, open, close, low, high, eob', adjust=ADJUST_PREV, df=True)
         # 收盘价在5日均线之上
         ma5 = history_n_data['close'].mean()
-        max_high3 = history_n_data['high'][1:4].max()
-        if row.close > ma5:
+        max_high5 = history_n_data['high'].max()
+        if row.close > ma5 and (
+                row.symbol.startswith('SZSE.300') or row.symbol.startswith('SZSE.00') or row.symbol.startswith('SHSE.60')):
             pre_row_df = pre_his_df[pre_his_df.symbol == row.symbol]
             if not pre_row_df.empty:
                 pre_row = pre_row_df.iloc[0]
                 # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%
-                if row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high3 and abs(
+                if row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and abs(
                         (pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
                     row['stock_name'] = all_stock[all_stock.symbol == row.symbol].iloc[0].sec_name
                     row['ma5'] = ma5
@@ -186,8 +191,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-09-01 09:30:00',
-        backtest_end_time='2020-09-30 16:00:00',
+        backtest_start_time='2020-11-26 09:30:00',
+        backtest_end_time='2020-11-27 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
