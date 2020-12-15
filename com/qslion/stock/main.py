@@ -3,96 +3,101 @@ from __future__ import print_function, absolute_import, unicode_literals
 from gm.api import *
 from datetime import timedelta
 import pandas as pd
-
 """
-策略
-回测时间为：2018-07-01 08:00:00 到 2019-10-01 16:00:00 
+策略FlySky
 """
-
-
 def init(context):
-    unsubscribe(symbols='*', frequency='60s')
-    # schedule 定时任务详见： https://www.myquant.cn/docs/python/python_basic#7bce6621a1abafe8
-    # 每月第一个交易日的09:40 定时执行algo任务
-    schedule(schedule_func=algo, date_rule='1d', time_rule='09:40:00')
-
     # 1.设置策略参数
     # 最大持有股票数
     context.hold_max = 2
     # 持有天数
-    context.periods = 2
+    context.periods = 3
+    # 各股票持仓时间
+    context.hold_days = {}
     # 最大交易资金比例
     context.ratio = 0.8
     # 标的池
     context.stocks = pd.DataFrame()
-
+    # 取消所有订阅
+    unsubscribe(symbols='*', frequency='60s')
+    # 每个交易日的09:45 定时执行algo任务
+    schedule(schedule_func=algo, date_rule='1d', time_rule='09:50:00')
+    # 每天的16:40 执行策略algo_1
+    schedule(schedule_func=algo_1, date_rule='1d', time_rule='16:40:00')
 
 def algo(context):
-    # 获取当前时间
-    now = context.now
     print("当前执行日期为：", context.now.strftime("%Y-%m-%d %H:%M:%S"))
-    # 获取上一个交易日
-    last_day = get_previous_trading_date(exchange='SHSE', date=now)
     if not context.stocks.empty:
         account_symbols = list(map(lambda x: x.symbol, context.account().positions()))
         unsub_stocks = context.stocks[~context.stocks['symbol'].isin(account_symbols)]
         if not unsub_stocks.empty:
             # 取消未持仓订阅，持仓订阅在卖出后取消
             unsubscribe(symbols=','.join(unsub_stocks['symbol']), frequency='60s')
+    # 过滤
+    data_df = get_filter_stocks(context)
 
-    data_df = get_filter_stocks(context, last_day)
-    # print(data_df)
     if not data_df.empty:
-        # data_df.to_csv('d:\\his1.csv', encoding='utf_8_sig')
+        print('【'+context.now.strftime("%Y-%m-%d") + '】过滤结果：' + ','.join(data_df['symbol']))
+        data_df.to_csv('d:\\his-' + context.now.strftime("%Y-%m-%d") + '.csv', encoding='utf_8_sig')
         context.stocks = data_df
         subscribe(symbols=','.join(data_df['symbol']), frequency='60s')
 
+def algo_1(context):
+    for stock in list(context.hold_days.keys()):
+        # 持仓天数增加
+        context.hold_days[stock] += 1
 
 def on_bar(context, bars):
-    # 买入策略：持仓数未达上限
-    if len(context.account().positions()) < context.hold_max:
-        stock_df = context.stocks[context.stocks['symbol'] == bars[0]['symbol']]
-        if not stock_df.empty and bars[0]['close'] < stock_df.iloc[0].ma5 * 1.02 and not context.account().position(
-                symbol=bars[0]['symbol'], side=PositionSide_Long):
-            # 计算每个个股应该在持仓中的权重
-            percent = 1.0 / context.hold_max * context.ratio
-            # 限价买入
-            order_target_percent(symbol=bars[0]['symbol'], percent=percent, order_type=OrderType_Limit,
-                                 price=bars[0]['close'], position_side=PositionSide_Long)
-            print("标的：{},买入信号：{},买入限价：{},时间：{},持仓量:{}".format(bars[0]['symbol'], stock_df.iloc[0].ma5 * 1.02,
-                                                              bars[0]['close'],
-                                                              bars[0]['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                              len(context.account().positions())))
+    for bar in bars:
+        # 1.买入策略：持仓数未达上限
+        if len(context.account().positions()) < context.hold_max:
+            stock_df = context.stocks[context.stocks['symbol'] == bar['symbol']]
+            if not stock_df.empty and bar['close'] < stock_df.iloc[0].ma5 * 1.02 and not context.account().position(
+                    symbol=bar['symbol'], side=PositionSide_Long):
+                # 计算每个个股应该在持仓中的权重
+                percent = 1.0 / context.hold_max * context.ratio
+                # 限价买入
+                order_target_percent(symbol=bar['symbol'], percent=percent, order_type=OrderType_Limit,
+                                     price=bar['close'], position_side=PositionSide_Long)
+                context.hold_days[bar['symbol']] = 0
+                print("标的：{},买入信号：{},买入限价：{},时间：{},持仓量:{}".format(bar['symbol'], stock_df.iloc[0].ma5 * 1.02,
+                                                                  bar['close'],
+                                                                  bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                  len(context.account().positions())))
 
-    if len(context.account().positions()) > 0 and context.account().position(symbol=bars[0]['symbol'],
-                                                                             side=PositionSide_Long):
-        buy_date = context.account().position(symbol=bars[0]['symbol'], side=PositionSide_Long).created_at.date()
-        if (context.now.date() - buy_date).days >= 1:
-            vwap = context.account().position(symbol=bars[0]['symbol'], side=PositionSide_Long).vwap
-            cur_close = bars[0]['close']
-            # 卖出策略1：预期收益8%
-            if cur_close / vwap > 1.1:
-                order_target_percent(symbol=bars[0]['symbol'], percent=0, order_type=OrderType_Market,
-                                     position_side=PositionSide_Long)
+         # 2.卖出策略
+        if len(context.account().positions()) > 0 and context.account().position(symbol=bar['symbol'],
+                                                                                 side=PositionSide_Long):
+            if context.hold_days.get(bar['symbol'], 0) >= 1:
+                vwap = context.account().position(symbol=bar['symbol'], side=PositionSide_Long).vwap
 
-                unsubscribe(symbols=bars[0]['symbol'], frequency='60s')
-                print("标的：{},买出信号（1.08）：{},持仓均价：{},时间：{},持仓量:{}".format(bars[0]['symbol'], cur_close,
-                                                                        vwap,
-                                                                        bars[0]['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        len(context.account().positions())))
+                # 卖出策略1：预期收益+15%
+                if bar['close'] / vwap > 1.15:
+                    order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
+                                         position_side=PositionSide_Long)
 
-        # 卖出策略2：持仓到期股票
-        if (context.now.date() - buy_date).days >= context.periods:
-            order_target_percent(symbol=bars[0]['symbol'], percent=0, order_type=OrderType_Market,
-                                 position_side=PositionSide_Long)
-            unsubscribe(symbols=bars[0]['symbol'], frequency='60s')
-            print("标的：{},买出信号（periods）：{},持仓均价：{},时间：{},持仓量:{}".format(bars[0]['symbol'], cur_close,
-                                                                       vwap,
-                                                                       bars[0]['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                                       len(context.account().positions())))
+                    unsubscribe(symbols=bar['symbol'], frequency='60s')
+                    context.hold_days.pop(bar['symbol'])
+                    print("标的：{},买出信号（+15%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
+                                                                            vwap,
+                                                                            bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                            len(context.account().positions())))
+
+                # 卖出策略2：预期亏损-3%
+                if bar['close'] / vwap < 0.97 : # or context.hold_days.get(bar['symbol'], 0) >= context.periods
+                    order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
+                                         position_side=PositionSide_Long)
+                    unsubscribe(symbols=bar['symbol'], frequency='60s')
+                    context.hold_days.pop(bar['symbol'])
+                    print("标的：{},买出信号（-3%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
+                                                                           vwap,
+                                                                           bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                           len(context.account().positions())))
 
 
-def get_filter_stocks(context, history_day):
+def get_filter_stocks(context):
+    # 获取上一个交易日作为过滤日期条件
+    history_day = get_previous_trading_date(exchange='SHSE', date=context.now)
     # 选取全A股（剔除停牌和st股和上市不足50日的新股和退市股和B股）
     date1 = (context.now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
     date2 = context.now.strftime("%Y-%m-%d %H:%M:%S")
@@ -149,12 +154,19 @@ def get_filter_stocks(context, history_day):
                 # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%
                 if row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high3 and abs(
                         (pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
-                    row['anme'] = all_stock[all_stock.symbol == row.symbol].iloc[0].sec_name
+                    row['stock_name'] = all_stock[all_stock.symbol == row.symbol].iloc[0].sec_name
                     row['ma5'] = ma5
+                    row['plan_buy_price'] = ma5 * 1.02
+                    row['plan_sell_price0'] = ma5 * 1.02 * 1.15
+                    row['plan_sell_price1'] = ma5 * 1.02 * 0.97
                     data_df = data_df.append(row)
 
     data_df.reset_index(drop=True, inplace=True)
     return data_df
+
+
+def on_backtest_finished(context, indicator):
+    print('回测结束，绩效信息：', indicator)
 
 
 if __name__ == '__main__':
@@ -174,8 +186,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-10-09 09:30:00',
-        backtest_end_time='2020-10-23 16:00:00',
+        backtest_start_time='2020-09-01 09:30:00',
+        backtest_end_time='2020-09-30 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
