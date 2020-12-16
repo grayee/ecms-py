@@ -1,8 +1,10 @@
+#!/usr/bin/python
 # coding=utf-8
 from __future__ import print_function, absolute_import, unicode_literals
 from gm.api import *
 from datetime import timedelta
 import pandas as pd
+import sqlite3
 """
 策略FlySky
 """
@@ -18,14 +20,28 @@ def init(context):
     context.ratio = 0.8
     # 标的池
     context.stocks = pd.DataFrame()
+    # 缓存
+    context.cached = True
+
+    date1 = (context.now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
+    date2 = context.now.strftime("%Y-%m-%d %H:%M:%S")
+    # 通过get_instruments获取所有的上市股票代码
+    all_stock = get_instruments(exchanges='SHSE, SZSE', sec_types=[1],
+                                fields='symbol, sec_name,listed_date, delisted_date', df=True)
+    # 选取全A股（剔除停牌和st股和上市不足50日的新股和退市股和B股）
+    context.all_stock = all_stock[(all_stock['listed_date'] < date1) & (all_stock['delisted_date'] > date2) &
+                                  (all_stock['symbol'].str[5] != '9') & (all_stock['symbol'].str[5] != '2') &
+                                  (all_stock['symbol'].str.startswith('SZSE.300') | all_stock['symbol'].str.startswith(
+                                      'SZSE.00') | all_stock['symbol'].str.startswith('SHSE.60'))]
+
     # 取消所有订阅
     unsubscribe(symbols='*', frequency='60s')
     # 每个交易日的09:45 定时执行algo任务
-    schedule(schedule_func=algo, date_rule='1d', time_rule='09:50:00')
-    # 每天的16:40 执行策略algo_1
-    schedule(schedule_func=algo_1, date_rule='1d', time_rule='16:40:00')
+    schedule(schedule_func=algo_trading, date_rule='1d', time_rule='09:50:00')
+    # 每天的15:30 执行盘后策略algo_after_trading
+    schedule(schedule_func=algo_after_trading, date_rule='1d', time_rule='15:30:00')
 
-def algo(context):
+def algo_trading(context):
     print("当前执行日期为：", context.now.strftime("%Y-%m-%d %H:%M:%S"))
     if not context.stocks.empty:
         account_symbols = list(map(lambda x: x.symbol, context.account().positions()))
@@ -34,15 +50,13 @@ def algo(context):
             # 取消未持仓订阅，持仓订阅在卖出后取消
             unsubscribe(symbols=','.join(unsub_stocks['symbol']), frequency='60s')
     # 过滤
-    data_df = get_filter_stocks(context)
-
-    if not data_df.empty:
-        print('【'+context.now.strftime("%Y-%m-%d") + '】过滤结果：' + ','.join(data_df['symbol']))
+    context.stocks = get_filter_stocks(context)
+    if not context.stocks.empty:
+        print('【'+context.now.strftime("%Y-%m-%d") + '】过滤结果：' + ','.join(context.stocks['symbol']))
         # data_df.to_csv('d:\\his-' + context.now.strftime("%Y-%m-%d") + '.csv', encoding='utf_8_sig')
-        context.stocks = data_df
-        subscribe(symbols=','.join(data_df['symbol']), frequency='60s')
+        subscribe(symbols=','.join(context.stocks['symbol']), frequency='60s')
 
-def algo_1(context):
+def algo_after_trading(context):
     for stock in list(context.hold_days.keys()):
         # 持仓天数增加
         context.hold_days[stock] += 1
@@ -50,7 +64,7 @@ def algo_1(context):
 def on_bar(context, bars):
     for bar in bars:
         # 1.买入策略：持仓数未达上限
-        if len(context.account().positions()) < context.hold_max:
+        if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
             stock_df = context.stocks[context.stocks['symbol'] == bar['symbol']]
             if not stock_df.empty and bar['close'] < stock_df.iloc[0].ma5 * 1.02 and not context.account().position(
                     symbol=bar['symbol'], side=PositionSide_Long):
@@ -101,73 +115,81 @@ def on_bar(context, bars):
 def get_filter_stocks(context):
     # 获取上一个交易日作为过滤日期条件
     history_day = get_previous_trading_date(exchange='SHSE', date=context.now)
-    # 选取全A股（剔除停牌和st股和上市不足50日的新股和退市股和B股）
-    date1 = (context.now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
-    date2 = context.now.strftime("%Y-%m-%d %H:%M:%S")
-    # 通过get_instruments获取所有的上市股票代码 详见：https://www.myquant.cn/docs/python/python_select_api#8ba2064987fb1d1f
-    all_stock = get_instruments(exchanges='SHSE, SZSE', sec_types=[1],
-                                fields='symbol, sec_name,listed_date, delisted_date',
-                                df=True)
-    code_df = all_stock[(all_stock['listed_date'] < date1) & (all_stock['delisted_date'] > date2) &
-                        (all_stock['symbol'].str[5] != '9') & (all_stock['symbol'].str[5] != '2')]
-
-    history_df = history(symbol=','.join(code_df['symbol']), frequency='1d', start_time=history_day,
-                         end_time=history_day,
-                         fields='symbol,pre_close,open, close, low, high, volume,amount,eob,bob', adjust=ADJUST_PREV,
-                         df=True)
-
-    # 格式化为float，然后处理成%格式： {:.2f}%
-    # history_df['amplitude'] = history_df.apply(lambda x: '{:.2f}%'.format((x.high - x.low)*100 / x.low), axis=1)
-    # 振幅
-    history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
-
-    # 过滤:振幅>8%,向下振幅>=5%,向上振幅大>%2,涨幅>=%5
-    history_df = history_df.loc[lambda x: (x.amplitude >= 0.08) &  # 振幅>8%
-                                          ((x.open - x.low) / x.low >= 0.03) &  # 向下振幅>=3%
-                                          ((x.high - x.close) / x.close > 0.02) &  # 向上振幅大>%2
-                                          ((x.close - x.pre_close) / x.pre_close >= 0.05) &  # 涨幅>=%5
-                                          (x.close > x.pre_close)]  # 收盘高于昨日
-
-    ## 排序 ##
-    history_df.sort_index(axis=1)
-    history_df = history_df.sort_values(by=['amplitude'], ascending=False)
-    # 重置索引
-    history_df.reset_index(drop=True, inplace=True)
-    # history_df.to_csv('d:\\his.csv')
-
-    # 前日
-    before_day = get_previous_trading_date(exchange='SHSE', date=history_day)
-    # print("前日", before_day)
-
-    pre_his_df = history(symbol=','.join(history_df['symbol']), frequency='1d', start_time=before_day,
-                         end_time=before_day,
-                         fields='symbol,pre_close,open, close, low, high, volume,amount,eob,bob', adjust=ADJUST_PREV,
-                         df=True)
+    if context.cached:
+        history_df = get_stock_history(context, history_day)
+    else:
+        with sqlite3.connect('history.db') as conn:
+            history_df = pd.read_sql('SELECT h.* FROM his_raw h WHERE h.eob=%(his_day)s', conn,
+                                     params={'his_day': history_day})
+            if history_df.empty:
+                history_df = get_stock_history(context, history_day)
 
     data_df = pd.DataFrame()
     for row_index, row in history_df.iterrows():
         history_n_data = history_n(symbol=row.symbol, frequency='1d', count=5, end_time=history_day,
-                                   fields='symbol, open, close, low, high, eob', adjust=ADJUST_PREV, df=True)
+                                   fields='symbol, pre_close,open, close, low, high, volume,amount,eob',
+                                   adjust=ADJUST_PREV, df=True)
         # 收盘价在5日均线之上
         ma5 = history_n_data['close'].mean()
         max_high5 = history_n_data['high'].max()
-        if row.close > ma5 and (
-                row.symbol.startswith('SZSE.300') or row.symbol.startswith('SZSE.00') or row.symbol.startswith('SHSE.60')):
-            pre_row_df = pre_his_df[pre_his_df.symbol == row.symbol]
+        if row.close > ma5:
+            pre_row_df = history_n_data[-2:-1]
             if not pre_row_df.empty:
                 pre_row = pre_row_df.iloc[0]
                 # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%
-                if row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and abs(
-                        (pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
-                    row['stock_name'] = all_stock[all_stock.symbol == row.symbol].iloc[0].sec_name
+                if row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and \
+                        abs((pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
                     row['ma5'] = ma5
                     row['plan_buy_price'] = ma5 * 1.02
                     row['plan_sell_price0'] = ma5 * 1.02 * 1.15
                     row['plan_sell_price1'] = ma5 * 1.02 * 0.97
                     data_df = data_df.append(row)
 
+    if context.cached:
+        cache_data(data_df, history_df)
+
     data_df.reset_index(drop=True, inplace=True)
     return data_df
+
+
+def cache_data(data_df, history_df):
+    with sqlite3.connect('history.db') as conn:
+        if not history_df.empty:
+            history_df.to_sql('his_raw', conn, if_exists='append', index=False)
+        if not data_df.empty:
+            print(data_df)
+            dtype_dict = {
+                'volume':'INTEGER'
+            }
+            data_df.to_sql('his_target', conn, if_exists='append', index=False, dtype=dtype_dict)
+
+
+def get_stock_history(context, history_day):
+    all_stock = context.all_stock
+    history_df = history(symbol=','.join(all_stock['symbol']), frequency='1d', start_time=history_day,
+                         end_time=history_day,
+                         fields='symbol,pre_close,open, close, low, high, volume,amount,eob', adjust=ADJUST_PREV,
+                         df=True)
+    # 格式化为float，然后处理成%格式： {:.2f}%
+    # history_df['amplitude'] = history_df.apply(lambda x: '{:.2f}%'.format((x.high - x.low)*100 / x.low), axis=1)
+    # 振幅
+    history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
+    # 过滤:振幅>8%,向下振幅>=5%,向上振幅大>%2,涨幅>=%5
+    history_df = history_df.loc[lambda x: (x.amplitude >= 0.08) &  # 振幅>8%
+                                          ((x.open - x.low) / x.low >= 0.03) &  # 向下振幅>=3%
+                                          ((x.high - x.close) / x.close > 0.02) &  # 向上振幅大>%2
+                                          ((x.close - x.pre_close) / x.pre_close >= 0.05) &  # 涨幅>=%5
+                                          (x.close > x.pre_close)]  # 收盘高于昨日
+    if not history_df.empty:
+        history_df['stock_name'] = history_df.apply(
+            lambda x: all_stock.loc[all_stock.symbol == x.symbol].iloc[0].sec_name,
+            axis=1)
+        ## 排序 ##
+        history_df.sort_index(axis=1)
+        history_df = history_df.sort_values(by=['amplitude'], ascending=False)
+        # 重置索引
+        history_df.reset_index(drop=True, inplace=True)
+    return history_df
 
 
 def on_backtest_finished(context, indicator):
@@ -191,8 +213,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-11-26 09:30:00',
-        backtest_end_time='2020-11-27 16:00:00',
+        backtest_start_time='2020-11-01 09:30:00',
+        backtest_end_time='2020-11-10 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
