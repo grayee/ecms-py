@@ -21,7 +21,7 @@ def init(context):
     # 标的池
     context.stocks = pd.DataFrame()
     # 缓存
-    context.cached = True
+    context.cached = False
 
     date1 = (context.now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
     date2 = context.now.strftime("%Y-%m-%d %H:%M:%S")
@@ -54,7 +54,7 @@ def algo_trading(context):
     if not context.stocks.empty:
         print('【'+context.now.strftime("%Y-%m-%d") + '】过滤结果：' + ','.join(context.stocks['symbol']))
         # data_df.to_csv('d:\\his-' + context.now.strftime("%Y-%m-%d") + '.csv', encoding='utf_8_sig')
-        subscribe(symbols=','.join(context.stocks['symbol']), frequency='60s')
+        subscribe(symbols=','.join(context.stocks['symbol']), count=15, frequency='60s')
 
 def algo_after_trading(context):
     for stock in list(context.hold_days.keys()):
@@ -62,54 +62,61 @@ def algo_after_trading(context):
         context.hold_days[stock] += 1
 
 def on_bar(context, bars):
-    for bar in bars:
-        # 1.买入策略：持仓数未达上限
-        if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
-            stock_df = context.stocks[context.stocks['symbol'] == bar['symbol']]
-            if not stock_df.empty and bar['close'] < stock_df.iloc[0].ma5 * 1.02 and not context.account().position(
-                    symbol=bar['symbol'], side=PositionSide_Long):
-                # 计算每个个股应该在持仓中的权重
-                percent = 1.0 / context.hold_max * context.ratio
-                # 限价买入
-                order_target_percent(symbol=bar['symbol'], percent=percent, order_type=OrderType_Limit,
-                                     price=bar['close'], position_side=PositionSide_Long)
-                context.hold_days[bar['symbol']] = 0
-                print("标的：{},买入信号：{},买入限价：{},时间：{},持仓量:{}".format(bar['symbol'], stock_df.iloc[0].ma5 * 1.02,
-                                                                  bar['close'],
-                                                                  bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                                  len(context.account().positions())))
+    # 在subscribe函数中订阅了多个标的的bar,同时wait_group参数值为true,返回包含多个标的的bars，否则每次返回只包含单个标的list长度为1的bars
+    bar = bars[0]
+    subcribe_data = context.data(symbol=bar['symbol'], frequency='60s', count=15, fields='close')
+    close_mean_15m = subcribe_data['close'].mean()
+    # print(bar['symbol']+':'+str(bar['close'])+'<======>'+str(close_mean_15m))
 
-         # 2.卖出策略
-        if len(context.account().positions()) > 0 and context.account().position(symbol=bar['symbol'],
-                                                                                 side=PositionSide_Long):
-            if context.hold_days.get(bar['symbol'], 0) >= 1:
-                vwap = context.account().position(symbol=bar['symbol'], side=PositionSide_Long).vwap
-                returns = 1.08
-                if bar['symbol'].startswith('SZSE.300'):
-                    returns = 1.15
 
-                # 卖出策略1：预期收益+15%
-                if bar['close'] / vwap > returns:
-                    order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
-                                         position_side=PositionSide_Long)
+    # 1.买入策略：持仓数未达上限
+    if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
+        stock_df = context.stocks[context.stocks['symbol'] == bar['symbol']]
+        if not stock_df.empty and bar['close'] < stock_df.iloc[0].ma5 * 1.02 and not context.account().position(
+                symbol=bar['symbol'], side=PositionSide_Long):
+            # 计算每个个股应该在持仓中的权重
+            percent = 1.0 / context.hold_max * context.ratio
+            # 限价买入
+            order_target_percent(symbol=bar['symbol'], percent=percent, order_type=OrderType_Limit,
+                                 price=bar['close'], position_side=PositionSide_Long)
+            context.hold_days[bar['symbol']] = 0
+            print("标的：{},买入信号：{},买入限价：{},时间：{},持仓量:{}".format(bar['symbol'], stock_df.iloc[0].ma5 * 1.02,
+                                                              bar['close'],
+                                                              bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                              len(context.account().positions())))
 
-                    unsubscribe(symbols=bar['symbol'], frequency='60s')
-                    context.hold_days.pop(bar['symbol'])
-                    print("标的：{},买出信号（+15%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
-                                                                            vwap,
-                                                                            bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                                            len(context.account().positions())))
+    # 2.卖出策略
+    if len(context.account().positions()) > 0 and context.account().position(symbol=bar['symbol'],
+                                                                             side=PositionSide_Long):
+        if context.hold_days.get(bar['symbol'], 0) >= 1:
+            vwap = context.account().position(symbol=bar['symbol'], side=PositionSide_Long).vwap
+            returns = 1.08
+            if bar['symbol'].startswith('SZSE.300'):
+                returns = 1.15
 
-                # 卖出策略2：预期亏损-3%
-                if bar['close'] / vwap < 0.97 : # or context.hold_days.get(bar['symbol'], 0) >= context.periods
-                    order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
-                                         position_side=PositionSide_Long)
-                    unsubscribe(symbols=bar['symbol'], frequency='60s')
-                    context.hold_days.pop(bar['symbol'])
-                    print("标的：{},买出信号（-3%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
-                                                                           vwap,
-                                                                           bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                                           len(context.account().positions())))
+            # 卖出策略1：预期收益+15%
+            if bar['close'] / vwap > returns:
+                order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
+                                     position_side=PositionSide_Long)
+
+                unsubscribe(symbols=bar['symbol'], frequency='60s')
+                context.hold_days.pop(bar['symbol'])
+                print("标的：{},买出信号（+15%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
+                                                                        vwap,
+                                                                        bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                        len(context.account().positions())))
+
+            # 卖出策略2：预期亏损-3%
+            if bar['close'] / vwap < 0.97:  # or context.hold_days.get(bar['symbol'], 0) >= context.periods
+                order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
+                                     position_side=PositionSide_Long)
+                unsubscribe(symbols=bar['symbol'], frequency='60s')
+                context.hold_days.pop(bar['symbol'])
+                print("标的：{},买出信号（-3%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
+                                                                       vwap,
+                                                                       bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                       len(context.account().positions())))
+
 
 
 def get_filter_stocks(context):
@@ -118,11 +125,12 @@ def get_filter_stocks(context):
     if context.cached:
         history_df = get_stock_history(context, history_day)
     else:
-        with sqlite3.connect('history.db') as conn:
-            history_df = pd.read_sql('SELECT h.* FROM his_raw h WHERE h.eob=%(his_day)s', conn,
-                                     params={'his_day': history_day})
-            if history_df.empty:
-                history_df = get_stock_history(context, history_day)
+        history_df = get_stock_history(context, history_day)
+        # with sqlite3.connect('history.db') as conn:
+        #     history_df = pd.read_sql_query('SELECT h.* FROM his_raw h WHERE h.eob=%(his_day)s', conn,
+        #                              params={'his_day': history_day})
+        #     if history_df.empty:
+        #         history_df = get_stock_history(context, history_day)
 
     data_df = pd.DataFrame()
     for row_index, row in history_df.iterrows():
@@ -154,13 +162,12 @@ def get_filter_stocks(context):
 
 def cache_data(data_df, history_df):
     with sqlite3.connect('history.db') as conn:
+        dtype_dict = {
+            'volume': 'INTEGER'
+        }
         if not history_df.empty:
-            history_df.to_sql('his_raw', conn, if_exists='append', index=False)
+            history_df.to_sql('his_raw', conn, if_exists='append', index=False, dtype=dtype_dict)
         if not data_df.empty:
-            print(data_df)
-            dtype_dict = {
-                'volume':'INTEGER'
-            }
             data_df.to_sql('his_target', conn, if_exists='append', index=False, dtype=dtype_dict)
 
 
