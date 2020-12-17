@@ -201,7 +201,7 @@ def get_stock_history(context, history_day):
         history_df = pd.merge(history_df, all_stock, how='left', on=['symbol'])
         history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
         # 成交额大于流通盘的10%
-        history_df = history_df.loc[lambda x: (x.amount >= x.NEGOTIABLEMV * 0.1)]
+        history_df = history_df.loc[lambda x: (x.amount >= x.NEGOTIABLEMV * 0.05)]
         ## 排序 ##
         history_df.sort_index(axis=1)
         history_df = history_df.sort_values(by=['amplitude'], ascending=False)
