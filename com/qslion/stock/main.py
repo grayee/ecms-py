@@ -27,10 +27,11 @@ def init(context):
     date2 = context.now.strftime("%Y-%m-%d %H:%M:%S")
     # 通过get_instruments获取所有的上市股票代码
     all_stock = get_instruments(exchanges='SHSE, SZSE', sec_types=[1],
-                                fields='symbol, sec_name,listed_date, delisted_date', df=True)
+                                fields='symbol, sec_name,listed_date, delisted_date,sec_level', df=True)
     # 选取全A股（剔除停牌和st股和上市不足50日的新股和退市股和B股）
     context.all_stock = all_stock[(all_stock['listed_date'] < date1) & (all_stock['delisted_date'] > date2) &
                                   (all_stock['symbol'].str[5] != '9') & (all_stock['symbol'].str[5] != '2') &
+                                  (all_stock['sec_level'] == 1) &
                                   (all_stock['symbol'].str.startswith('SZSE.300') | all_stock['symbol'].str.startswith(
                                       'SZSE.00') | all_stock['symbol'].str.startswith('SHSE.60'))]
 
@@ -220,8 +221,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-11-01 09:30:00',
-        backtest_end_time='2020-11-10 16:00:00',
+        backtest_start_time='2020-12-15 09:30:00',
+        backtest_end_time='2020-12-16 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
