@@ -145,7 +145,7 @@ def get_filter_stocks(context):
             pre_row_df = history_n_data[-2:-1]
             if not pre_row_df.empty:
                 pre_row = pre_row_df.iloc[0]
-                # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%
+                # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%,成交量大于流通盘10%
                 if row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and \
                         abs((pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
                     row['ma5'] = ma5
@@ -153,6 +153,8 @@ def get_filter_stocks(context):
                     row['plan_sell_price0'] = ma5 * 1.02 * 1.15
                     row['plan_sell_price1'] = ma5 * 1.02 * 0.97
                     data_df = data_df.append(row)
+
+
 
     if context.cached:
         cache_data(data_df, history_df)
@@ -182,21 +184,32 @@ def get_stock_history(context, history_day):
     # history_df['amplitude'] = history_df.apply(lambda x: '{:.2f}%'.format((x.high - x.low)*100 / x.low), axis=1)
     # 振幅
     history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
+    history_df['pct_chg'] = history_df.apply(lambda x: (x.close - x.pre_close) / x.pre_close, axis=1).astype(float)
     # 过滤:振幅>8%,向下振幅>=5%,向上振幅大>%2,涨幅>=%5
     history_df = history_df.loc[lambda x: (x.amplitude >= 0.08) &  # 振幅>8%
                                           ((x.open - x.low) / x.low >= 0.03) &  # 向下振幅>=3%
                                           ((x.high - x.close) / x.close > 0.02) &  # 向上振幅大>%2
-                                          ((x.close - x.pre_close) / x.pre_close >= 0.05) &  # 涨幅>=%5
+                                          (x.pct_chg >= 0.05) &  # 涨幅>=%5
                                           (x.close > x.pre_close)]  # 收盘高于昨日
     if not history_df.empty:
-        history_df['stock_name'] = history_df.apply(
-            lambda x: all_stock.loc[all_stock.symbol == x.symbol].iloc[0].sec_name,
-            axis=1)
+        fund_df = get_fundamentals(table='trading_derivative_indicator', symbols=','.join(history_df['symbol']),
+                                   start_date=history_day, end_date=history_day,
+                                   fields='NEGOTIABLEMV,TOTMKTCAP,TURNRATE,PELFY,PETTM,PEMRQ,PB,EVPS',
+                                   df=True)
+
+        history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
+        history_df = pd.merge(history_df, all_stock, how='left', on=['symbol'])
+        history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
+        # 成交额大于流通盘的10%
+        history_df = history_df.loc[lambda x: (x.amount >= x.NEGOTIABLEMV * 0.1)]
         ## 排序 ##
         history_df.sort_index(axis=1)
         history_df = history_df.sort_values(by=['amplitude'], ascending=False)
         # 重置索引
         history_df.reset_index(drop=True, inplace=True)
+        # 改变数据列的顺序
+        history_df = history_df[['eob', 'symbol', 'sec_name', 'pct_chg', 'amplitude', 'pre_close', 'close', 'open', 'high',
+                                 'low', 'amount', 'volume','NEGOTIABLEMV','TOTMKTCAP','PETTM','PB','EVPS']]
     return history_df
 
 
@@ -222,7 +235,7 @@ if __name__ == '__main__':
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
         backtest_start_time='2020-12-15 09:30:00',
-        backtest_end_time='2020-12-16 16:00:00',
+        backtest_end_time='2020-12-17 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
