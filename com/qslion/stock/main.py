@@ -55,7 +55,8 @@ def algo_trading(context):
     if not context.stocks.empty:
         print('【'+context.now.strftime("%Y-%m-%d") + '】过滤结果：' + ','.join(context.stocks['symbol']))
         # data_df.to_csv('d:\\his-' + context.now.strftime("%Y-%m-%d") + '.csv', encoding='utf_8_sig')
-        subscribe(symbols=','.join(context.stocks['symbol']), count=15, frequency='60s')
+        subscribe(symbols=','.join(context.stocks['symbol']), count=1, frequency='60s')
+        subscribe(symbols=','.join(context.stocks['symbol']), count=2, frequency='1d')
 
 def algo_after_trading(context):
     for stock in list(context.hold_days.keys()):
@@ -65,8 +66,8 @@ def algo_after_trading(context):
 def on_bar(context, bars):
     # 在subscribe函数中订阅了多个标的的bar,同时wait_group参数值为true,返回包含多个标的的bars，否则每次返回只包含单个标的list长度为1的bars
     bar = bars[0]
-    subcribe_data = context.data(symbol=bar['symbol'], frequency='60s', count=15, fields='close')
-    close_mean_15m = subcribe_data['close'].mean()
+    # subcribe_data = context.data(symbol=bar['symbol'], frequency='60s', count=15, fields='close')
+    # close_mean_15m = subcribe_data['close'].mean()
     # print(bar['symbol']+':'+str(bar['close'])+'<======>'+str(close_mean_15m))
 
 
@@ -94,29 +95,34 @@ def on_bar(context, bars):
             returns = 1.08
             if bar['symbol'].startswith('SZSE.300'):
                 returns = 1.15
-
+            #上日
+            pre_close = context.data(symbol=bar['symbol'], frequency='1d', count=2).loc[1].close
             # 卖出策略1：预期收益+15%
             if bar['close'] / vwap > returns:
                 order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
                                      position_side=PositionSide_Long)
 
                 unsubscribe(symbols=bar['symbol'], frequency='60s')
+                unsubscribe(symbols=bar['symbol'], frequency='1d')
                 context.hold_days.pop(bar['symbol'])
-                print("标的：{},买出信号（+15%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
+                rate = '{:.2f}%'.format((bar['close'] / vwap - 1) * 100)
+                print("标的：{},买出信号（{}）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'],rate, bar['close'],
                                                                         vwap,
                                                                         bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
                                                                         len(context.account().positions())))
 
             # 卖出策略2：预期亏损-3%
-            if bar['close'] / vwap < 0.97:  # or context.hold_days.get(bar['symbol'], 0) >= context.periods
+            if bar['close'] / vwap < 0.97 or (pre_close > vwap and bar['close'] / pre_close < 0.97):  # or context.hold_days.get(bar['symbol'], 0) >= context.periods
                 order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
                                      position_side=PositionSide_Long)
                 unsubscribe(symbols=bar['symbol'], frequency='60s')
+                unsubscribe(symbols=bar['symbol'], frequency='1d')
                 context.hold_days.pop(bar['symbol'])
-                print("标的：{},买出信号（-3%）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], bar['close'],
-                                                                       vwap,
-                                                                       bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                                       len(context.account().positions())))
+                rate = '{:.2f}%'.format((bar['close'] - vwap) * 100 / vwap)
+                print("标的：{},买出信号（{}）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], rate, bar['close'],
+                                                                      vwap,
+                                                                      bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                      len(context.account().positions())))
 
 
 
@@ -145,8 +151,10 @@ def get_filter_stocks(context):
             pre_row_df = history_n_data[-2:-1]
             if not pre_row_df.empty:
                 pre_row = pre_row_df.iloc[0]
+                # 前三個交易日去除漲停
+                max3_limit_df = history_n_data[-4:-1].loc[lambda x: x.close / x.pre_close > 1.09]
                 # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%,成交量大于流通盘10%
-                if row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and \
+                if max3_limit_df.empty and row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and \
                         abs((pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
                     row['ma5'] = ma5
                     row['plan_buy_price'] = ma5 * 1.02
@@ -200,8 +208,10 @@ def get_stock_history(context, history_day):
         history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
         history_df = pd.merge(history_df, all_stock, how='left', on=['symbol'])
         history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
-        # 成交额大于流通盘的10%
-        history_df = history_df.loc[lambda x: (x.amount >= x.NEGOTIABLEMV * 0.05)]
+        # 成交额大于流通盘的5%,換手率>10%
+        history_df = history_df.loc[lambda x: (
+                (x.amount > x.NEGOTIABLEMV * 0.05) & (x.TURNRATE > 0.05) | (x.amount > x.NEGOTIABLEMV * 0.1) & (
+                x.TURNRATE > 0.1))]
         ## 排序 ##
         history_df.sort_index(axis=1)
         history_df = history_df.sort_values(by=['amplitude'], ascending=False)
@@ -234,8 +244,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-12-15 09:30:00',
-        backtest_end_time='2020-12-17 16:00:00',
+        backtest_start_time='2020-11-03 09:30:00',
+        backtest_end_time='2020-11-06 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
