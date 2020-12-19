@@ -50,6 +50,7 @@ def algo_trading(context):
         if not unsub_stocks.empty:
             # 取消未持仓订阅，持仓订阅在卖出后取消
             unsubscribe(symbols=','.join(unsub_stocks['symbol']), frequency='60s')
+            unsubscribe(symbols=','.join(unsub_stocks['symbol']), frequency='1d')
     # 过滤
     context.stocks = get_filter_stocks(context)
     if not context.stocks.empty:
@@ -193,10 +194,10 @@ def get_stock_history(context, history_day):
     # 振幅
     history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
     history_df['pct_chg'] = history_df.apply(lambda x: (x.close - x.pre_close) / x.pre_close, axis=1).astype(float)
-    # 过滤:振幅>8%,向下振幅>=5%,向上振幅大>%2,涨幅>=%5
+    # 过滤:振幅>8%,向下振幅>=%2,向上振幅大>=%2,涨幅>=%5
     history_df = history_df.loc[lambda x: (x.amplitude >= 0.08) &  # 振幅>8%
-                                          ((x.open - x.low) / x.low >= 0.03) &  # 向下振幅>=3%
-                                          ((x.high - x.close) / x.close > 0.02) &  # 向上振幅大>%2
+                                          ((x.open - x.low) / x.low >= 0.02) &  # 向下振幅>=2%
+                                          ((x.high - x.close) / x.close >= 0.02) &  # 向上振幅大>%2
                                           (x.pct_chg >= 0.05) &  # 涨幅>=%5
                                           (x.close > x.pre_close)]  # 收盘高于昨日
     if not history_df.empty:
@@ -244,8 +245,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-11-03 09:30:00',
-        backtest_end_time='2020-11-06 16:00:00',
+        backtest_start_time='2020-12-01 09:30:00',
+        backtest_end_time='2020-12-19 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
