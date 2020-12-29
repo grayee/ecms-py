@@ -43,7 +43,6 @@ def init(context):
     schedule(schedule_func=algo_after_trading, date_rule='1d', time_rule='15:30:00')
 
 def algo_trading(context):
-    print("当前执行日期为：", context.now.strftime("%Y-%m-%d %H:%M:%S"))
     if not context.stocks.empty:
         account_symbols = list(map(lambda x: x.symbol, context.account().positions()))
         unsub_stocks = context.stocks[~context.stocks['symbol'].isin(account_symbols)]
@@ -54,8 +53,7 @@ def algo_trading(context):
     # 过滤
     context.stocks = get_filter_stocks(context)
     if not context.stocks.empty:
-        print('【'+context.now.strftime("%Y-%m-%d") + '】过滤结果：' + ','.join(context.stocks['symbol']))
-        # data_df.to_csv('d:\\his-' + context.now.strftime("%Y-%m-%d") + '.csv', encoding='utf_8_sig')
+        print('【'+context.now.strftime("%Y-%m-%d %H:%M:%S") + '】过滤结果：' + ','.join(context.stocks['symbol']))
         subscribe(symbols=','.join(context.stocks['symbol']), count=1, frequency='60s')
         subscribe(symbols=','.join(context.stocks['symbol']), count=2, frequency='1d')
 
@@ -67,10 +65,8 @@ def algo_after_trading(context):
 def on_bar(context, bars):
     # 在subscribe函数中订阅了多个标的的bar,同时wait_group参数值为true,返回包含多个标的的bars，否则每次返回只包含单个标的list长度为1的bars
     bar = bars[0]
-    # subcribe_data = context.data(symbol=bar['symbol'], frequency='60s', count=15, fields='close')
-    # close_mean_15m = subcribe_data['close'].mean()
-    # print(bar['symbol']+':'+str(bar['close'])+'<======>'+str(close_mean_15m))
-
+    # 上日
+    pre_close = context.data(symbol=bar['symbol'], frequency='1d', count=2).loc[1].close
 
     # 1.买入策略：持仓数未达上限
     if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
@@ -96,8 +92,7 @@ def on_bar(context, bars):
             returns = 1.08
             if bar['symbol'].startswith('SZSE.300'):
                 returns = 1.15
-            #上日
-            pre_close = context.data(symbol=bar['symbol'], frequency='1d', count=2).loc[1].close
+
             # 卖出策略1：预期收益+15%
             if bar['close'] / vwap > returns:
                 order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
@@ -163,8 +158,6 @@ def get_filter_stocks(context):
                     row['plan_sell_price1'] = ma5 * 1.02 * 0.97
                     data_df = data_df.append(row)
 
-
-
     if context.cached:
         cache_data(data_df, history_df)
 
@@ -189,14 +182,12 @@ def get_stock_history(context, history_day):
                          end_time=history_day,
                          fields='symbol,pre_close,open, close, low, high, volume,amount,eob', adjust=ADJUST_PREV,
                          df=True)
-    # 格式化为float，然后处理成%格式： {:.2f}%
-    # history_df['amplitude'] = history_df.apply(lambda x: '{:.2f}%'.format((x.high - x.low)*100 / x.low), axis=1)
     # 振幅
     history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
     history_df['pct_chg'] = history_df.apply(lambda x: (x.close - x.pre_close) / x.pre_close, axis=1).astype(float)
     # 过滤:振幅>8%,向下振幅>=%2,向上振幅大>=%2,涨幅>=%5
-    history_df = history_df.loc[lambda x: (x.amplitude >= 0.08) &  # 振幅>8%
-                                          ((x.open - x.low) / x.low >= 0.02) &  # 向下振幅>=2%
+    history_df = history_df.loc[lambda x: (x.amplitude >= 0.1) &  # 振幅>10%
+                                          # ((x.open - x.low) / x.low >= 0.02) &  # 向下振幅>=2%
                                           ((x.high - x.close) / x.close >= 0.02) &  # 向上振幅大>%2
                                           (x.pct_chg >= 0.05) &  # 涨幅>=%5
                                           (x.close > x.pre_close)]  # 收盘高于昨日
@@ -209,10 +200,8 @@ def get_stock_history(context, history_day):
         history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
         history_df = pd.merge(history_df, all_stock, how='left', on=['symbol'])
         history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
-        # 成交额大于流通盘的5%,換手率>10%
-        history_df = history_df.loc[lambda x: (
-                (x.amount > x.NEGOTIABLEMV * 0.05) & (x.TURNRATE > 0.05) | (x.amount > x.NEGOTIABLEMV * 0.1) & (
-                x.TURNRATE > 0.1))]
+        # 成交额大于流通盘的10%,換手率>15%
+        history_df = history_df.loc[lambda x: ((x.amount > x.NEGOTIABLEMV * 0.1) & ( x.TURNRATE > 0.15))]
         ## 排序 ##
         history_df.sort_index(axis=1)
         history_df = history_df.sort_values(by=['amplitude'], ascending=False)
@@ -245,8 +234,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-12-01 09:30:00',
-        backtest_end_time='2020-12-19 16:00:00',
+        backtest_start_time='2020-12-28 09:30:00',
+        backtest_end_time='2020-12-29 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
