@@ -65,8 +65,10 @@ def algo_after_trading(context):
 def on_bar(context, bars):
     # 在subscribe函数中订阅了多个标的的bar,同时wait_group参数值为true,返回包含多个标的的bars，否则每次返回只包含单个标的list长度为1的bars
     bar = bars[0]
-    # 上日
-    pre_close = context.data(symbol=bar['symbol'], frequency='1d', count=2).loc[1].close
+    # subcribe_data = context.data(symbol=bar['symbol'], frequency='60s', count=15, fields='close')
+    # close_mean_15m = subcribe_data['close'].mean()
+    # print(bar['symbol']+':'+str(bar['close'])+'<======>'+str(close_mean_15m))
+
 
     # 1.买入策略：持仓数未达上限
     if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
@@ -89,10 +91,11 @@ def on_bar(context, bars):
                                                                              side=PositionSide_Long):
         if context.hold_days.get(bar['symbol'], 0) >= 1:
             vwap = context.account().position(symbol=bar['symbol'], side=PositionSide_Long).vwap
-            returns = 1.08
+            returns = 1.10
             if bar['symbol'].startswith('SZSE.300'):
                 returns = 1.15
-
+            #上日
+            pre_close = context.data(symbol=bar['symbol'], frequency='1d', count=2).loc[1].close
             # 卖出策略1：预期收益+15%
             if bar['close'] / vwap > returns:
                 order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
@@ -150,7 +153,7 @@ def get_filter_stocks(context):
                 # 前三個交易日去除漲停
                 max3_limit_df = history_n_data[-4:-1].loc[lambda x: x.close / x.pre_close > 1.09]
                 # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%,成交量大于流通盘10%
-                if max3_limit_df.empty and row.low <= pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and \
+                if max3_limit_df.empty and row.low < pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and \
                         abs((pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09:
                     row['ma5'] = ma5
                     row['plan_buy_price'] = ma5 * 1.02
@@ -186,10 +189,10 @@ def get_stock_history(context, history_day):
     history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
     history_df['pct_chg'] = history_df.apply(lambda x: (x.close - x.pre_close) / x.pre_close, axis=1).astype(float)
     # 过滤:振幅>8%,向下振幅>=%2,向上振幅大>=%2,涨幅>=%5
-    history_df = history_df.loc[lambda x: (x.amplitude >= 0.1) &  # 振幅>10%
+    history_df = history_df.loc[lambda x: (x.amplitude > 0.1) &  # 振幅>10%
                                           # ((x.open - x.low) / x.low >= 0.02) &  # 向下振幅>=2%
-                                          ((x.high - x.close) / x.close >= 0.02) &  # 向上振幅大>%2
-                                          (x.pct_chg >= 0.05) &  # 涨幅>=%5
+                                          ((x.high - x.close) / x.close > 0.02) &  # 向上振幅大>%2
+                                          (x.pct_chg > 0.05) &  # 涨幅>=%5
                                           (x.close > x.pre_close)]  # 收盘高于昨日
     if not history_df.empty:
         fund_df = get_fundamentals(table='trading_derivative_indicator', symbols=','.join(history_df['symbol']),
@@ -200,8 +203,8 @@ def get_stock_history(context, history_day):
         history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
         history_df = pd.merge(history_df, all_stock, how='left', on=['symbol'])
         history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
-        # 成交额大于流通盘的10%,換手率>15%
-        history_df = history_df.loc[lambda x: ((x.amount > x.NEGOTIABLEMV * 0.1) & ( x.TURNRATE > 0.15))]
+        # 成交额大于流通盘的10%,換手率>10%
+        history_df = history_df.loc[lambda x: (x.amount > x.NEGOTIABLEMV * 0.1) & (x.TURNRATE > 0.1)]
         ## 排序 ##
         history_df.sort_index(axis=1)
         history_df = history_df.sort_values(by=['amplitude'], ascending=False)
@@ -234,8 +237,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-12-28 09:30:00',
-        backtest_end_time='2020-12-29 16:00:00',
+        backtest_start_time='2020-10-08 09:30:00',
+        backtest_end_time='2020-12-17 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
