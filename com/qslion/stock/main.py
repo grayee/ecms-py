@@ -16,6 +16,7 @@ def init(context):
     context.periods = 3
     # 各股票持仓时间
     context.hold_days = {}
+    context.stock_today_open = {}
     # 最大交易资金比例
     context.ratio = 0.8
     # 标的池
@@ -38,14 +39,15 @@ def init(context):
     # 取消所有订阅
     unsubscribe(symbols='*', frequency='60s')
     # 每个交易日的09:45 定时执行algo任务
-    schedule(schedule_func=algo_trading, date_rule='1d', time_rule='09:50:00')
+    schedule(schedule_func=algo_trading, date_rule='1d', time_rule='09:30:00')
     # 每天的15:30 执行盘后策略algo_after_trading
     schedule(schedule_func=algo_after_trading, date_rule='1d', time_rule='15:30:00')
 
 def algo_trading(context):
     if not context.stocks.empty:
         account_symbols = list(map(lambda x: x.symbol, context.account().positions()))
-        unsub_stocks = context.stocks[~context.stocks['symbol'].isin(account_symbols)]
+        unsub_stocks = context.stocks[(~context.stocks['symbol'].isin(account_symbols)) & (
+                context.now > context.stocks['eob'] + timedelta(3))]
         if not unsub_stocks.empty:
             # 取消未持仓订阅，持仓订阅在卖出后取消
             unsubscribe(symbols=','.join(unsub_stocks['symbol']), frequency='60s')
@@ -58,6 +60,7 @@ def algo_trading(context):
         subscribe(symbols=','.join(context.stocks['symbol']), count=2, frequency='1d')
 
 def algo_after_trading(context):
+    context.stock_today_open = {}
     for stock in list(context.hold_days.keys()):
         # 持仓天数增加
         context.hold_days[stock] += 1
@@ -68,23 +71,32 @@ def on_bar(context, bars):
     # subcribe_data = context.data(symbol=bar['symbol'], frequency='60s', count=15, fields='close')
     # close_mean_15m = subcribe_data['close'].mean()
     # print(bar['symbol']+':'+str(bar['close'])+'<======>'+str(close_mean_15m))
-
-
+    # if bar['bob'].strftime("%Y-%m-%d %H:%M:%S") == context.now.strftime("%Y-%m-%d") + " 09:30:00":
+    if context.stock_today_open.get(bar['symbol'], 0) == 0:
+        context.stock_today_open[bar['symbol']] = bar['open']
     # 1.买入策略：持仓数未达上限
     if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
         stock_df = context.stocks[context.stocks['symbol'] == bar['symbol']]
-        if not stock_df.empty and bar['close'] < stock_df.iloc[0].ma5 * 1.02 and not context.account().position(
-                symbol=bar['symbol'], side=PositionSide_Long):
-            # 计算每个个股应该在持仓中的权重
-            percent = 1.0 / context.hold_max * context.ratio
-            # 限价买入
-            order_target_percent(symbol=bar['symbol'], percent=percent, order_type=OrderType_Limit,
-                                 price=bar['close'], position_side=PositionSide_Long)
-            context.hold_days[bar['symbol']] = 0
-            print("标的：{},买入信号：{},买入限价：{},时间：{},持仓量:{}".format(bar['symbol'], stock_df.iloc[0].ma5 * 1.02,
-                                                              bar['close'],
-                                                              bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                              len(context.account().positions())))
+        if not stock_df.empty:
+            obj_stock = stock_df.iloc[0]
+            if bar['close'] < obj_stock.ma5 * 1.02 and not context.account().position(symbol=bar['symbol'], side=PositionSide_Long):
+                # 排除低开超过3%
+                today_open = context.stock_today_open.get(bar['symbol'], 0)
+                if today_open > 0 and (today_open - obj_stock.close) / obj_stock.close > -0.03:
+                    # 计算每个个股应该在持仓中的权重
+                    percent = 1.0 / context.hold_max * context.ratio
+                    # 限价买入
+                    order_target_percent(symbol=bar['symbol'], percent=percent, order_type=OrderType_Limit,
+                                         price=bar['close'], position_side=PositionSide_Long)
+                    context.hold_days[bar['symbol']] = 0
+                    print("标的：{},买入信号：{},买入限价：{},时间：{},持仓量:{}".format(bar['symbol'], obj_stock.ma5 * 1.02,
+                                                                      bar['close'],
+                                                                      bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                      len(context.account().positions())))
+
+
+
+
 
     # 2.卖出策略
     if len(context.account().positions()) > 0 and context.account().position(symbol=bar['symbol'],
@@ -200,7 +212,7 @@ def get_stock_history(context, history_day):
                                    fields='NEGOTIABLEMV,TOTMKTCAP,TURNRATE,PELFY,PETTM,PEMRQ,PB,EVPS',
                                    df=True)
 
-        history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
+        # history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
         history_df = pd.merge(history_df, all_stock, how='left', on=['symbol'])
         history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
         # 成交额大于流通盘的10%,換手率>10%
@@ -237,8 +249,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-10-08 09:30:00',
-        backtest_end_time='2020-12-17 16:00:00',
+        backtest_start_time='2020-10-13 09:30:00',
+        backtest_end_time='2020-10-28 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
