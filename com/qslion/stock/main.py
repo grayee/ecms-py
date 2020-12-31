@@ -44,20 +44,24 @@ def init(context):
     schedule(schedule_func=algo_after_trading, date_rule='1d', time_rule='15:30:00')
 
 def algo_trading(context):
+    last_stock = pd.DataFrame()
     if not context.stocks.empty:
         account_symbols = list(map(lambda x: x.symbol, context.account().positions()))
-        unsub_stocks = context.stocks[(~context.stocks['symbol'].isin(account_symbols)) & (
+        cancel_sub_stocks = context.stocks[(~context.stocks['symbol'].isin(account_symbols)) & (
                 context.now > context.stocks['eob'] + timedelta(3))]
-        if not unsub_stocks.empty:
+        last_stock = context.stocks[(~context.stocks['symbol'].isin(cancel_sub_stocks['symbol']))]
+        if not cancel_sub_stocks.empty:
             # 取消未持仓订阅，持仓订阅在卖出后取消
-            unsubscribe(symbols=','.join(unsub_stocks['symbol']), frequency='60s')
-            unsubscribe(symbols=','.join(unsub_stocks['symbol']), frequency='1d')
+            unsubscribe(symbols=','.join(cancel_sub_stocks['symbol']), frequency='60s')
+            unsubscribe(symbols=','.join(cancel_sub_stocks['symbol']), frequency='1d')
     # 过滤
     context.stocks = get_filter_stocks(context)
     if not context.stocks.empty:
         print('【'+context.now.strftime("%Y-%m-%d %H:%M:%S") + '】过滤结果：' + ','.join(context.stocks['symbol']))
         subscribe(symbols=','.join(context.stocks['symbol']), count=1, frequency='60s')
         subscribe(symbols=','.join(context.stocks['symbol']), count=2, frequency='1d')
+
+    context.stocks = pd.concat([context.stocks, last_stock], ignore_index=True)
 
 def algo_after_trading(context):
     context.stock_today_open = {}
@@ -74,6 +78,9 @@ def on_bar(context, bars):
     # if bar['bob'].strftime("%Y-%m-%d %H:%M:%S") == context.now.strftime("%Y-%m-%d") + " 09:30:00":
     if context.stock_today_open.get(bar['symbol'], 0) == 0:
         context.stock_today_open[bar['symbol']] = bar['open']
+
+    # 上日
+    pre_close = context.data(symbol=bar['symbol'], frequency='1d', count=2).loc[1].close
     # 1.买入策略：持仓数未达上限
     if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
         stock_df = context.stocks[context.stocks['symbol'] == bar['symbol']]
@@ -82,7 +89,7 @@ def on_bar(context, bars):
             if bar['close'] < obj_stock.ma5 * 1.02 and not context.account().position(symbol=bar['symbol'], side=PositionSide_Long):
                 # 排除低开超过3%
                 today_open = context.stock_today_open.get(bar['symbol'], 0)
-                if today_open > 0 and (today_open - obj_stock.close) / obj_stock.close > -0.03:
+                if today_open > 0 and (today_open - pre_close) / pre_close > -0.03:
                     # 计算每个个股应该在持仓中的权重
                     percent = 1.0 / context.hold_max * context.ratio
                     # 限价买入
@@ -106,8 +113,7 @@ def on_bar(context, bars):
             returns = 1.10
             if bar['symbol'].startswith('SZSE.300'):
                 returns = 1.15
-            #上日
-            pre_close = context.data(symbol=bar['symbol'], frequency='1d', count=2).loc[1].close
+
             # 卖出策略1：预期收益+15%
             if bar['close'] / vwap > returns:
                 order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
@@ -249,8 +255,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-10-13 09:30:00',
-        backtest_end_time='2020-10-28 16:00:00',
+        backtest_start_time='2020-10-08 09:30:00',
+        backtest_end_time='2020-12-28 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
