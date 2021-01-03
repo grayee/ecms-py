@@ -138,6 +138,6 @@ if __name__ == '__main__':
     #### 登陆系统 ####
     bs.login()
     # 获取指定日期全部日线数据
-    download_data('2020-12-07')
+    download_data('2020-12-31')
     #### 登出系统 ####
     bs.logout()
