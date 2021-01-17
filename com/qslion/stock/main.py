@@ -5,43 +5,57 @@ from gm.api import *
 from datetime import timedelta
 import pandas as pd
 import sqlite3
+
 """
 策略FlySky
 """
+
+
 def init(context):
     # 1.设置策略参数
+    set_algo_param(context)
+    # 取消所有订阅
+    unsubscribe(symbols='*', frequency='60s')
+    # 每个交易日的09:30 定时执行algo_trading选股任务
+    schedule(schedule_func=algo_trading, date_rule='1d', time_rule='09:30:00')
+    # 每天的15:30 执行盘后策略algo_after_trading
+    schedule(schedule_func=algo_after_trading, date_rule='1d', time_rule='15:30:00')
+
+
+def set_algo_param(context):
     # 最大持有股票数
     context.hold_max = 2
     # 持有天数
     context.periods = 3
     # 各股票持仓时间
     context.hold_days = {}
+    # 股票的当日开盘价
     context.stock_today_open = {}
     # 最大交易资金比例
     context.ratio = 0.8
     # 标的池
     context.stocks = pd.DataFrame()
     # 缓存
-    context.cached = True
+    context.cached = False
+    # 所有股票
+    context.all_stock = get_all_stock(context.now)
 
-    date1 = (context.now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
-    date2 = context.now.strftime("%Y-%m-%d %H:%M:%S")
-    # 通过get_instruments获取所有的上市股票代码
-    all_stock = get_instruments(exchanges='SHSE, SZSE', sec_types=[1],
-                                fields='symbol, sec_name,listed_date, delisted_date,sec_level', df=True)
-    # 选取全A股（剔除停牌和st股和上市不足50日的新股和退市股和B股）
-    context.all_stock = all_stock[(all_stock['listed_date'] < date1) & (all_stock['delisted_date'] > date2) &
-                                  (all_stock['symbol'].str[5] != '9') & (all_stock['symbol'].str[5] != '2') &
-                                  (all_stock['sec_level'] == 1) &
-                                  (all_stock['symbol'].str.startswith('SZSE.300') | all_stock['symbol'].str.startswith(
-                                      'SZSE.00') | all_stock['symbol'].str.startswith('SHSE.60'))]
 
-    # 取消所有订阅
-    unsubscribe(symbols='*', frequency='60s')
-    # 每个交易日的09:45 定时执行algo任务
-    schedule(schedule_func=algo_trading, date_rule='1d', time_rule='09:30:00')
-    # 每天的15:30 执行盘后策略algo_after_trading
-    schedule(schedule_func=algo_after_trading, date_rule='1d', time_rule='15:30:00')
+def get_all_stock(datetime):
+    date_fmt_str = '%Y-%m-%d %H:%M:%S'
+    bf_date_100 = (datetime - timedelta(days=100)).strftime(date_fmt_str)
+    cur_date = datetime.strftime(date_fmt_str)
+    stock_field_str = 'symbol, sec_name,listed_date, delisted_date,sec_level'
+    # 获取所有的上市股票代码
+    all_stock_df = get_instruments(exchanges='SHSE, SZSE', sec_types=[1], fields=stock_field_str, df=True)
+    # 剔除停牌和st股和上市不足50日的新股和退市股和B股
+    return all_stock_df[(all_stock_df['listed_date'] < bf_date_100) & (all_stock_df['delisted_date'] > cur_date) &
+                        (all_stock_df['symbol'].str[5] != '9') & (all_stock_df['symbol'].str[5] != '2') &
+                        (all_stock_df['sec_level'] == 1) &
+                        (all_stock_df['symbol'].str.startswith('SZSE.300') |
+                         all_stock_df['symbol'].str.startswith('SZSE.00') |
+                         all_stock_df['symbol'].str.startswith('SHSE.60'))]
+
 
 def algo_trading(context):
     last_stock = pd.DataFrame()
@@ -57,17 +71,19 @@ def algo_trading(context):
     # 过滤
     context.stocks = get_filter_stocks(context)
     if not context.stocks.empty:
-        print('【'+context.now.strftime("%Y-%m-%d %H:%M:%S") + '】过滤结果：' + ','.join(context.stocks['symbol']))
+        print('【' + context.now.strftime("%Y-%m-%d %H:%M:%S") + '】过滤结果：' + ','.join(context.stocks['symbol']))
         subscribe(symbols=','.join(context.stocks['symbol']), count=1, frequency='60s')
         subscribe(symbols=','.join(context.stocks['symbol']), count=1, frequency='1d')
 
     context.stocks = pd.concat([context.stocks, last_stock], ignore_index=True)
+
 
 def algo_after_trading(context):
     context.stock_today_open = {}
     for stock in list(context.hold_days.keys()):
         # 持仓天数增加
         context.hold_days[stock] += 1
+
 
 def on_bar(context, bars):
     if context.now.strftime("%Y-%m-%d %H:%M:%S") <= context.now.strftime("%Y-%m-%d") + " 15:00:00":
@@ -88,20 +104,20 @@ def on_bar(context, bars):
         if day_df.loc[0].eob > context.now:
             pre_close = day_df.loc[0].pre_close
 
-
         # 1.买入策略：持仓数未达上限
         if not context.stocks.empty and len(context.account().positions()) < context.hold_max:
             stock_df = context.stocks[context.stocks['symbol'] == bar['symbol']]
             if not stock_df.empty:
                 obj_stock = stock_df.iloc[0]
-                if bar['close'] < obj_stock.ma5 * 1.02 and bar['close'] > obj_stock.low and not context.account().position(symbol=bar['symbol'], side=PositionSide_Long):
+                if obj_stock.ma5 * 1.02 > bar['close'] > obj_stock.low \
+                        and not context.account().position(symbol=bar['symbol'], side=PositionSide_Long):
                     # 排除低开超过3%
                     if today_open > 0 and (today_open - pre_close) / pre_close > -0.03:
                         # 计算每个个股应该在持仓中的权重
                         percent = 1.0 / context.hold_max * context.ratio
-                        # 限价买入
-                        order_target_percent(symbol=bar['symbol'], percent=percent, order_type=OrderType_Limit,
-                                             price=bar['close'], position_side=PositionSide_Long)
+                        # 买入
+                        order_target_percent(symbol=bar['symbol'], percent=percent, order_type=OrderType_Market,
+                                             position_side=PositionSide_Long)
                         context.hold_days[bar['symbol']] = 0
                         print("标的：{},买入信号：{},买入限价：{},时间：{},持仓量:{}".format(bar['symbol'], obj_stock.ma5 * 1.02,
                                                                           bar['close'],
@@ -125,13 +141,15 @@ def on_bar(context, bars):
                     unsubscribe(symbols=bar['symbol'], frequency='1d')
                     context.hold_days.pop(bar['symbol'])
                     rate = '{:.2f}%'.format((bar['close'] / vwap - 1) * 100)
-                    print("标的：{},买出信号（{}）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'],rate, bar['close'],
-                                                                            vwap,
-                                                                            bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
-                                                                            len(context.account().positions())))
+                    print("标的：{},买出信号（{}）：{},持仓均价：{},时间：{},持仓量:{}".format(bar['symbol'], rate, bar['close'],
+                                                                          vwap,
+                                                                          bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
+                                                                          len(context.account().positions())))
 
                 # 卖出策略2：预期亏损-3%或者持股超过3天
-                if bar['close'] / vwap < 0.97 or (pre_close > vwap and bar['close'] / pre_close < 0.97) or context.hold_days.get(bar['symbol'], 0) >= context.periods:
+                if bar['close'] / vwap < 0.97 or (
+                        pre_close > vwap and bar['close'] / pre_close < 0.97) or context.hold_days.get(bar['symbol'],
+                                                                                                       0) >= context.periods:
                     order_target_percent(symbol=bar['symbol'], percent=0, order_type=OrderType_Market,
                                          position_side=PositionSide_Long)
                     unsubscribe(symbols=bar['symbol'], frequency='60s')
@@ -142,7 +160,6 @@ def on_bar(context, bars):
                                                                           vwap,
                                                                           bar['eob'].strftime("%Y-%m-%d %H:%M:%S"),
                                                                           len(context.account().positions())))
-
 
 
 def get_filter_stocks(context):
@@ -163,20 +180,20 @@ def get_filter_stocks(context):
         history_n_data = history_n(symbol=row.symbol, frequency='1d', count=20, end_time=history_day,
                                    fields='symbol, pre_close,open, close, low, high, volume,amount,eob',
                                    adjust=ADJUST_PREV, df=True)
-
         ma20 = history_n_data['close'].mean()
-        # 收盘价在5日均线之上
+        ma10 = history_n_data.tail(10)['close'].mean()
         ma5 = history_n_data.tail(5)['close'].mean()
-        max_high5 = history_n_data['high'].max()
-        if row.close > ma5:
+        max_high20 = history_n_data['high'].max()
+        # 5日均线在20日线附近,收盘价在5日均线之上,开盘价在5日均线之下
+        if ma20 * 1.02 < ma5 < ma20 * 1.08 and row.close > ma5 > row.open and row.high > max_high20 * 0.98 and row.low < ma10 * 1.01:
             pre_row_df = history_n_data[-2:-1]
             if not pre_row_df.empty:
                 pre_row = pre_row_df.iloc[0]
                 # 前三個交易日去除漲停
                 max3_limit_df = history_n_data[-4:-1].loc[lambda x: x.close / x.pre_close > 1.09]
                 # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%,成交量大于流通盘10%
-                if max3_limit_df.empty and row.low < pre_row.low * 1.02 and row.close > pre_row.high and row.high > max_high5 * 0.98 and \
-                        abs((pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09 and row.open < ma5 and row.low > ma20*0.98:
+                if max3_limit_df.empty and row.close > pre_row.high and \
+                        abs((pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09 and row.low < pre_row.low * 1.02:
                     row['ma5'] = ma5
                     row['plan_buy_price'] = ma5 * 1.02
                     row['plan_sell_price0'] = ma5 * 1.02 * 1.15
@@ -190,30 +207,17 @@ def get_filter_stocks(context):
     return data_df
 
 
-def cache_data(data_df, history_df):
-    with sqlite3.connect('history.db') as conn:
-        dtype_dict = {
-            'volume': 'INTEGER'
-        }
-        if not history_df.empty:
-            history_df.to_sql('his_raw', conn, if_exists='append', index=False, dtype=dtype_dict)
-        if not data_df.empty:
-            data_df.to_sql('his_target', conn, if_exists='append', index=False, dtype=dtype_dict)
-
-
 def get_stock_history(context, history_day):
-    all_stock = context.all_stock
-    history_df = history(symbol=','.join(all_stock['symbol']), frequency='1d', start_time=history_day,
+    history_df = history(symbol=','.join(context.all_stock['symbol']), frequency='1d', start_time=history_day,
                          end_time=history_day,
                          fields='symbol,pre_close,open, close, low, high, volume,amount,eob', adjust=ADJUST_PREV,
                          df=True)
     # 振幅
     history_df['amplitude'] = history_df.apply(lambda x: (x.high - x.low) / x.low, axis=1).astype(float)
-    history_df['pct_chg'] = history_df.apply(lambda x: (x.close - x.pre_close) / x.pre_close, axis=1).astype(float)
-    # 过滤:振幅>8%,向下振幅>=%2,向上振幅大>=%2,涨幅>=%5
+    history_df['pct_chg'] = history_df.apply(lambda x: (x.close - min(x.pre_close, x.low)) / min(x.pre_close, x.low),
+                                             axis=1).astype(float)
+    # 过滤:振幅>8%,涨幅>%5
     history_df = history_df.loc[lambda x: (x.amplitude > 0.08) &  # 振幅>10%
-                                          ((x.open - x.low) / x.low >= 0.02) &  # 向下振幅>=2%
-                                          # ((x.high - x.close) / x.close > 0.02) &  # 向上振幅大>%2
                                           (x.pct_chg > 0.05) &  # 涨幅>=%5
                                           (x.close > x.pre_close)]  # 收盘高于昨日
     if not history_df.empty:
@@ -223,21 +227,32 @@ def get_stock_history(context, history_day):
                                    df=True)
 
         # history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
-        history_df = pd.merge(history_df, all_stock, how='left', on=['symbol'])
         history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
-        # 成交额大于流通盘的10%,換手率>10%
+        # 成交额大于流通盘的7%,換手率>6%
         history_df = history_df.loc[lambda x: (x.amount > x.NEGOTIABLEMV * 0.07) & (x.TURNRATE > 6)]
+        history_df = pd.merge(history_df, context.all_stock, how='left', on=['symbol'])
         ## 排序 ##
         history_df.sort_index(axis=1)
         history_df = history_df.sort_values(by=['amplitude'], ascending=False)
         # 重置索引
         history_df.reset_index(drop=True, inplace=True)
         # 改变数据列的顺序
-        history_df = history_df[['eob', 'symbol', 'sec_name', 'pct_chg', 'amplitude', 'pre_close', 'close', 'open', 'high',
-                                 'low', 'amount', 'volume','NEGOTIABLEMV','TOTMKTCAP','PETTM','PB','EVPS']]
+        history_df = history_df[
+            ['eob', 'symbol', 'sec_name', 'pct_chg', 'amplitude', 'pre_close', 'close', 'open', 'high',
+             'low', 'amount', 'volume', 'NEGOTIABLEMV', 'TOTMKTCAP', 'PETTM', 'PB', 'EVPS']]
     return history_df
 
 
+
+def cache_data(data_df, history_df):
+    with sqlite3.connect('history.db') as conn:
+        dtype_dict = {
+            'volume': 'INTEGER'
+        }
+        if not history_df.empty:
+            history_df.to_sql('his_raw', conn, if_exists='append', index=False, dtype=dtype_dict)
+        if not data_df.empty:
+            data_df.to_sql('his_target', conn, if_exists='append', index=False, dtype=dtype_dict)
 
 def on_backtest_finished(context, indicator):
     print('回测结束，绩效信息：', indicator)
@@ -260,8 +275,8 @@ if __name__ == '__main__':
         filename='main.py',
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
-        backtest_start_time='2020-12-01 09:30:00',
-        backtest_end_time='2020-12-31 16:00:00',
+        backtest_start_time='2021-01-01 09:30:00',
+        backtest_end_time='2021-01-16 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
