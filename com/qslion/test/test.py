@@ -10,48 +10,30 @@ import requests
 import json
 
 
-def get_access_token():
-    """
-    获取微信全局接口的凭证(默认有效期俩个小时)
-    如果不每天请求次数过多, 通过设置缓存即可
-    """
-    result = requests.get(
-        url="https://api.weixin.qq.com/cgi-bin/token",
-        params={
-            "grant_type": "client_credential",
-            "appid": "wx7466a840388f72eb",
-            "secret": "103cde8efc413d482eedf182f5c1d891",
-        }
-    ).json()
+def send_dingding_msg(msg):
+    access_token = '57318d7149e6fffa726ae86e9ef45fc3dbf2fd0a844def710b019faa98ba5465'
+    # 钉钉生成的url
+    url = 'https://oapi.dingtalk.com/robot/send?access_token=' + access_token
+    # 中没有headers的'User-Agent'，通常会失败。
+    headers = {"Content-Type": "application/json ;charset=utf-8 "}
 
-    if result.get("access_token"):
-        access_token = result.get('access_token')
-    else:
-        access_token = None
-    return access_token
-
-
-def sendmsg(openid, msg):
-    access_token = get_access_token()
-
-    body = {
-        "touser": openid,
+    # 这里使用  文本类型，https://ding-doc.dingtalk.com/document/app/custom-robot-access/title-72m-8ag-pqw
+    data = {
         "msgtype": "text",
         "text": {
-            "content": msg
+            "content": "监控提醒：" + msg
+        },
+        "at": {
+            "isAtAll": True
         }
     }
-    response = requests.post(
-        url="https://api.weixin.qq.com/cgi-bin/message/custom/send",
-        params={
-            'access_token': access_token
-        },
-        data=bytes(json.dumps(body, ensure_ascii=False), encoding='utf-8')
-    )
-    # 这里可根据回执code进行判定是否发送成功(也可以根据code根据错误信息)
-    result = response.json()
-    print(result)
+
+    try:
+        r = requests.post(url, data=json.dumps(data).encode(encoding='utf-8'), headers=headers)
+        print(r.text)
+    except Exception as error:
+        print('发送钉钉消息失败', error)
 
 
 if __name__ == '__main__':
-    sendmsg('qslion', '发送消息内容')
+    send_dingding_msg("我就是我,是不一样的烟火")

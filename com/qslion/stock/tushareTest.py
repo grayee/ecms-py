@@ -12,6 +12,10 @@ import datetime
 import os
 import matplotlib.pyplot as plt
 
+import os
+import time
+import pandas as pd
+
 print("Tushare version is :【{}】 , Pandas version is  ; 【{}】".format(ts.__version__, pd.__version__))
 
 # 设置专业版token
@@ -53,3 +57,24 @@ print(df[["trade_date","close","amount"]])
 df[["trade_date","close","amount"]].T.loc["close"].plot(kind='line', label='Algeria')
 plt.legend(loc='upper left')
 plt.show()
+
+
+
+
+def check(code, low, high):
+    df = ts.get_realtime_quotes(code)
+    e = df[['code', 'name', 'price', 'time']]
+    p = df[u'price']
+    print
+    e
+    if float(p[0]) > low and float(p[0]) < high:
+        return True
+    else:
+        return False
+
+
+while True:
+    if check('sh', 3200, 10000) or check('601318', 0, 49):
+        os.system('play bell.wav')
+        exit()
+    time.sleep(5)

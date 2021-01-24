@@ -6,6 +6,9 @@ from datetime import timedelta
 import pandas as pd
 import sqlite3
 
+import requests
+import json
+
 """
 策略FlySky
 """
@@ -72,10 +75,12 @@ def algo_trading(context):
     context.stocks = get_filter_stocks(context)
     if not context.stocks.empty:
         print('【' + context.now.strftime("%Y-%m-%d %H:%M:%S") + '】过滤结果：' + ','.join(context.stocks['symbol']))
+        # send_dingding_msg('【' + context.now.strftime("%Y-%m-%d") + '】：' + ','.join(context.stocks['symbol']))
         subscribe(symbols=','.join(context.stocks['symbol']), count=1, frequency='60s')
         subscribe(symbols=','.join(context.stocks['symbol']), count=1, frequency='1d')
 
     context.stocks = pd.concat([context.stocks, last_stock], ignore_index=True)
+
 
 
 def algo_after_trading(context):
@@ -177,15 +182,15 @@ def get_filter_stocks(context):
 
     data_df = pd.DataFrame()
     for row_index, row in history_df.iterrows():
-        history_n_data = history_n(symbol=row.symbol, frequency='1d', count=20, end_time=history_day,
+        history_n_data = history_n(symbol=row.symbol, frequency='1d', count=30, end_time=history_day,
                                    fields='symbol, pre_close,open, close, low, high, volume,amount,eob',
                                    adjust=ADJUST_PREV, df=True)
-        ma20 = history_n_data['close'].mean()
+        ma20 = history_n_data.tail(20)['close'].mean()
         ma10 = history_n_data.tail(10)['close'].mean()
         ma5 = history_n_data.tail(5)['close'].mean()
-        max_high20 = history_n_data['high'].max()
+        max_high30 = history_n_data['high'].max()
         # 5日均线在20日线附近,收盘价在5日均线之上,开盘价在5日均线之下
-        if ma20 * 1.02 < ma5 < ma20 * 1.08 and row.close > ma5 > row.open and row.high > max_high20 * 0.98 and row.low < ma10 * 1.01:
+        if ma5 >= ma20 and row.close > ma5 > row.open and row.high > max_high30 * 0.98 and row.low < ma10 * 1.02:
             pre_row_df = history_n_data[-2:-1]
             if not pre_row_df.empty:
                 pre_row = pre_row_df.iloc[0]
@@ -193,7 +198,7 @@ def get_filter_stocks(context):
                 max3_limit_df = history_n_data[-4:-1].loc[lambda x: x.close / x.pre_close > 1.09]
                 # 当日最低价小于等于上日最低价的80%，当日收盘价高于昨日最高价,最高价高于3日最高价，上一日涨幅或跌幅<9%,成交量大于流通盘10%
                 if max3_limit_df.empty and row.close > pre_row.high and \
-                        abs((pre_row.close - pre_row.pre_close) / pre_row.close) < 0.09 and row.low < pre_row.low * 1.02:
+                        (pre_row.close - pre_row.open) / pre_row.open < 0.02 and row.low < pre_row.low * 1.02:
                     row['ma5'] = ma5
                     row['plan_buy_price'] = ma5 * 1.02
                     row['plan_sell_price0'] = ma5 * 1.02 * 1.15
@@ -217,7 +222,7 @@ def get_stock_history(context, history_day):
     history_df['pct_chg'] = history_df.apply(lambda x: (x.close - min(x.pre_close, x.low)) / min(x.pre_close, x.low),
                                              axis=1).astype(float)
     # 过滤:振幅>8%,涨幅>%5
-    history_df = history_df.loc[lambda x: (x.amplitude > 0.08) &  # 振幅>10%
+    history_df = history_df.loc[lambda x: (x.amplitude > 0.06) &  # 振幅>10%
                                           (x.pct_chg > 0.05) &  # 涨幅>=%5
                                           (x.close > x.pre_close)]  # 收盘高于昨日
     if not history_df.empty:
@@ -228,8 +233,8 @@ def get_stock_history(context, history_day):
 
         # history_df['eob'] = history_df.apply(lambda x: x.eob.strftime("%Y-%m-%d"), axis=1)
         history_df = pd.merge(history_df, fund_df, how='left', on=['symbol'])
-        # 成交额大于流通盘的7%,換手率>6%
-        history_df = history_df.loc[lambda x: (x.amount > x.NEGOTIABLEMV * 0.07) & (x.TURNRATE > 6)]
+        # 換手率>6%【成交额大于流通盘的6%】
+        history_df = history_df.loc[lambda x: x.TURNRATE > 6]
         history_df = pd.merge(history_df, context.all_stock, how='left', on=['symbol'])
         ## 排序 ##
         history_df.sort_index(axis=1)
@@ -243,7 +248,6 @@ def get_stock_history(context, history_day):
     return history_df
 
 
-
 def cache_data(data_df, history_df):
     with sqlite3.connect('history.db') as conn:
         dtype_dict = {
@@ -253,6 +257,31 @@ def cache_data(data_df, history_df):
             history_df.to_sql('his_raw', conn, if_exists='append', index=False, dtype=dtype_dict)
         if not data_df.empty:
             data_df.to_sql('his_target', conn, if_exists='append', index=False, dtype=dtype_dict)
+
+
+def send_dingding_msg(msg):
+    access_token = '57318d7149e6fffa726ae86e9ef45fc3dbf2fd0a844def710b019faa98ba5465'
+    # 钉钉生成的url
+    url = 'https://oapi.dingtalk.com/robot/send?access_token=' + access_token
+    # 中没有headers的'User-Agent'，通常会失败。
+    headers = {"Content-Type": "application/json ;charset=utf-8 "}
+
+    # 这里使用  文本类型，https://ding-doc.dingtalk.com/document/app/custom-robot-access/title-72m-8ag-pqw
+    data = {
+        "msgtype": "text",
+        "text": {
+            "content": "监控提醒：" + msg
+        },
+        "at": {
+            "isAtAll": True
+        }
+    }
+
+    try:
+        r = requests.post(url, data=json.dumps(data).encode(encoding='utf-8'), headers=headers)
+    except Exception as error:
+        print('发送钉钉消息失败', error)
+
 
 def on_backtest_finished(context, indicator):
     print('回测结束，绩效信息：', indicator)
@@ -276,7 +305,7 @@ if __name__ == '__main__':
         mode=MODE_BACKTEST,
         token='b526e92627f493aa90cdbae30a75407b63d1eae2',
         backtest_start_time='2021-01-01 09:30:00',
-        backtest_end_time='2021-01-16 16:00:00',
+        backtest_end_time='2021-01-23 16:00:00',
         backtest_adjust=ADJUST_PREV,
         backtest_initial_cash=100000,
         backtest_commission_ratio=0.0001,
